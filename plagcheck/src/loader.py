@@ -1,4 +1,4 @@
-""" loader.py — File ingestion and validation. """ 
+﻿""" loader.py — File ingestion and validation. """ 
 # pyrefly: ignore [missing-import]
 import os, re, chardet, pdfplumber, fitz 
 # pyrefly: ignore [missing-import]
@@ -18,16 +18,16 @@ class FileLoader:
         if ext == ".docx": return self._load_docx(path) 
         return self._load_text(path) 
 
-    def _validate(self, path): 
-        name = os.path.basename(path) 
-        if not SAFE_RE.match(name): 
-            raise FileLoadError(f"Unsafe filename: {name}") 
-        if ".." in path or os.path.isabs(path): 
-            raise FileLoadError(f"Path traversal: {path}") 
-        if os.path.getsize(path) > MAX_BYTES: 
-            raise FileLoadError(f"File > 10 MB: {path}") 
-        if os.path.splitext(path)[1].lower() not in SUPPORTED: 
-            raise FileLoadError(f"Unsupported format: {path}") 
+    def _validate(self, path):
+        name = os.path.basename(path)
+        if not SAFE_RE.match(name):
+            raise FileLoadError(f"Unsafe filename: {name}")
+        if ".." in path:
+            raise FileLoadError(f"Path traversal: {path}")
+        if os.path.splitext(path)[1].lower() not in SUPPORTED:
+            raise FileLoadError(f"Unsupported format: {path}")
+        if os.path.getsize(path) > MAX_BYTES:
+            raise FileLoadError(f"File > 10 MB: {path}")
 
     def _load_pdf(self, path): 
         try: # Stage 1: pdfplumber 
@@ -42,12 +42,14 @@ class FileLoader:
         except Exception: pass 
         raise FileLoadError(f"No extractable text (image-only?): {path}") 
 
-    def _load_text(self, path): 
-        raw = open(path,"rb").read(10_000) 
-        r = chardet.detect(raw) 
-        if r["confidence"] < 0.75: 
-            raise FileLoadError(f"Low encoding confidence: {path}") 
-        return open(path, encoding=r["encoding"], errors="replace").read() 
+    def _load_text(self, path):
+        with open(path, "rb") as f:
+            raw = f.read(10_000)
+        r = chardet.detect(raw)
+        if r["confidence"] < 0.75:
+            raise FileLoadError(f"Low encoding confidence: {path}")
+        with open(path, encoding=r["encoding"], errors="replace") as f:
+            return f.read()
 
     def _load_docx(self, path): 
         return "\n".join(p.text for p in DocxDocument(path).paragraphs) 

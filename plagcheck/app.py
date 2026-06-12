@@ -2,10 +2,9 @@
 import os
 import uuid
 from flask import Flask, request, jsonify
-from src.loader import FileLoader, FileLoadError
+from src.loader import FileLoader
 from src.preprocessor import Preprocessor
 from src.engine import AlgorithmEngine
-from src.reporter import ReportGenerator
 from src.audit import AuditLogger
 from dotenv import load_dotenv
 
@@ -14,21 +13,34 @@ load_dotenv()
 app = Flask(__name__)
 audit = AuditLogger()
 
-# In-memory store for reports if DB is not used for storing actual reports.
-# Realistically, this should query the DB, but the DB schema stores scan requests and pairs.
-# Let's interact with DB for reports, or just keep them in memory for simplicity of the API requirement.
-reports_store = {}
+reports_store: dict = {}
+
+VALID_ALGORITHMS = {"cosine", "winnowing", "jaccard", "ast", "all"}
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    return jsonify({"status": "ok", "service": "plagcheck", "version": "1.0.0"})
+
+@app.route("/api/algorithms", methods=["GET"])
+def api_algorithms():
+    return jsonify({"algorithms": sorted(VALID_ALGORITHMS)})
 
 @app.route("/api/check", methods=["POST"])
 def api_check():
     data = request.json or {}
     files = data.get("files", [])
     algorithm = data.get("algorithm", os.environ.get("DEFAULT_ALGORITHM", "cosine"))
-    threshold = float(data.get("threshold", os.environ.get("DEFAULT_THRESHOLD", "0.70")))
-    
+    try:
+        threshold = float(data.get("threshold", os.environ.get("DEFAULT_THRESHOLD", "0.70")))
+    except (ValueError, TypeError):
+        return jsonify({"error": "threshold must be a number between 0 and 1."}), 400
+
     if not files or not isinstance(files, list):
         audit.log("API_ERROR", payload={"error": "Invalid or missing files list"})
         return jsonify({"error": "Please provide a list of file paths."}), 400
+
+    if algorithm not in VALID_ALGORITHMS:
+        return jsonify({"error": f"Invalid algorithm '{algorithm}'. Choose from: {sorted(VALID_ALGORITHMS)}"}), 400
         
     scan_id = str(uuid.uuid4())
     audit.log("SCAN_START", payload={"scan_id": scan_id, "files": files, "algorithm": algorithm})

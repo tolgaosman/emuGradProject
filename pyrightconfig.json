@@ -1,0 +1,13 @@
+{
+  "venvPath": "d:\\Documents\\GitHub\\emuGradProject\\plagcheck",
+  "venv": "venv",
+  "executionEnvironments": [
+    {
+      "root": "d:\\Documents\\GitHub\\emuGradProject\\plagcheck"
+    }
+  ],
+  "extraPaths": [
+    "d:\\Documents\\GitHub\\emuGradProject\\plagcheck\\src",
+    "d:\\Documents\\GitHub\\emuGradProject\\plagcheck"
+  ]
+}

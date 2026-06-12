@@ -24,7 +24,7 @@ class AuditLogger:
         except Exception:
             return None
 
-    def log(self, event_type: str, scan_id: int = None, user_id: int = None, payload: dict = None):
+    def log(self, event_type: str, scan_id: int | None = None, user_id: int | None = None, payload: dict | None = None):
         detail = json.dumps(payload) if payload else None
         conn = self._get_connection()
         if conn:
@@ -42,8 +42,9 @@ class AuditLogger:
         else:
             self._fallback_log(event_type, scan_id, user_id, payload, "DB Connection Failed")
 
-    def _fallback_log(self, event_type: str, scan_id: int, user_id: int, payload: dict, error_msg: str):
-        with open("plagcheck.log", "a", encoding="utf-8") as f:
+    def _fallback_log(self, event_type: str, scan_id: int | None, user_id: int | None, payload: dict | None, error_msg: str):
+        log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "plagcheck.log"))
+        with open(log_path, "a", encoding="utf-8") as f:
             ts = datetime.now().isoformat()
             log_line = f"[{ts}] {event_type} | Scan: {scan_id} | User: {user_id} | Payload: {json.dumps(payload)} | Error: {error_msg}\n"
             f.write(log_line)

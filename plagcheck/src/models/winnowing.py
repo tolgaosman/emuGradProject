@@ -1,6 +1,7 @@
-""" winnowing.py — Winnowing document fingerprinting. """ 
-""" Reference: Schleimer, Wilkerson & Aiken (ACM SIGMOD 2003). """ 
+﻿""" winnowing.py — Winnowing document fingerprinting. """ 
+# Reference: Schleimer, Wilkerson & Aiken (ACM SIGMOD 2003). 
 import hashlib 
+# pyrefly: ignore [missing-import]
 from .base import SimilarityModel 
 
 def _h32(text: str) -> int: 
