@@ -21,7 +21,9 @@ def main():
                         help="Similarity threshold (0.01 - 0.99)")
     parser.add_argument("--output", type=str, default="output", help="Output directory for reports")
     parser.add_argument("--format", choices=["html", "csv", "both"], default="both", help="Report format")
-    
+    parser.add_argument("--exclusions", type=str, default=None,
+                        help="Path to an academic exclusion list (default: config/exclusions.txt)")
+
     args = parser.parse_args()
     
     if not (0.01 <= args.threshold <= 0.99):
@@ -32,7 +34,7 @@ def main():
     audit.log("SCAN_START", payload={"files": args.files, "algorithm": args.algorithm})
     
     loader = FileLoader()
-    preprocessor = Preprocessor()
+    preprocessor = Preprocessor(exclusions_path=args.exclusions)
     file_data = {}
     
     print(f"Loading {len(args.files)} files...")

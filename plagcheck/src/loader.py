@@ -1,8 +1,10 @@
-﻿""" loader.py — File ingestion and validation. """ 
-# pyrefly: ignore [missing-import]
-import os, re, chardet, pdfplumber, fitz 
-# pyrefly: ignore [missing-import]
-from docx import Document as DocxDocument 
+""" loader.py — File ingestion and validation. """
+import os
+import re
+import chardet
+import pdfplumber
+import fitz
+from docx import Document as DocxDocument
 
 SUPPORTED = {".txt", ".py", ".pdf", ".docx"} 
 MAX_BYTES = 10 * 1024 * 1024 

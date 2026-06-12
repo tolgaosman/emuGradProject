@@ -1,0 +1,8 @@
+Plagiarism detection is the task of finding cases of plagiarism inside a document or
+a collection of work. Automated similarity detection tools compare the text of the
+submitted documents with one another to discover passages that are suspiciously
+alike. A common pipeline first extracts the raw text, then normalizes it by
+lowercasing and stripping punctuation, and finally compares the documents with a
+similarity algorithm such as cosine similarity or the Jaccard index. When the
+resulting score passes a configured threshold, the pair of documents is flagged for
+manual review by a teacher.

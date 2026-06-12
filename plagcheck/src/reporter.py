@@ -1,8 +1,10 @@
 """ reporter.py — Output artifact generation. """
 import os
-import matplotlib; matplotlib.use("Agg")
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns, pandas as pd  # [24]
+import seaborn as sns
+import pandas as pd
 from .matrix import ComparisonMatrix
  
 class ReportGenerator:

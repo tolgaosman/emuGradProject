@@ -1,0 +1,66 @@
+# exclusions.txt — Academic / template term exclusion list
+#
+# Purpose: prevent common academic boilerplate and template terms from
+# triggering false-positive similarity flags. Terms listed here are added to
+# the stopword set in src/preprocessor.py and removed from documents before
+# similarity is computed.
+#
+# Format:
+#   - one term per line
+#   - lines starting with '#' and blank lines are ignored
+#   - terms are matched per-token AFTER lowercasing and Porter stemming, so
+#     prefer single-word terms. Multi-word entries are accepted but only match
+#     when they happen to survive as a single token (kept here for documentation).
+#
+# Total: 50 terms.
+
+abstract
+introduction
+background
+motivation
+objective
+methodology
+method
+approach
+analysis
+result
+discussion
+conclusion
+summary
+references
+bibliography
+appendix
+acknowledgement
+acknowledgements
+keywords
+chapter
+section
+subsection
+figure
+table
+equation
+algorithm
+overview
+literature
+review
+related
+proposed
+framework
+implementation
+evaluation
+experiment
+dataset
+university
+department
+faculty
+thesis
+dissertation
+supervisor
+abstractly
+hypothesis
+contribution
+limitation
+future
+work
+appendices
+ibid
