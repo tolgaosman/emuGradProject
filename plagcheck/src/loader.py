@@ -75,7 +75,7 @@ class FileLoader:
             pass
         try:  # Stage 2: PyMuPDF fallback
             with fitz.open(path) as doc:
-                text = "\n".join(page.get_text("text") for page in doc).strip()
+                text = "\n".join(str(page.get_text("text")) for page in doc).strip()
                 if text:
                     return text
         except Exception:

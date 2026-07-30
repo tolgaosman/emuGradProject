@@ -4,13 +4,17 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-.coverage
+# `pytest` now runs from the repo root (see pyproject.toml), so coverage.py
+# writes its data file here, not plagcheck/.coverage. It regenerates on every
+# run, so it's ignored like any other build artifact — this is distinct from
+# the tracked plagcheck/.coverage, which is a frozen historical snapshot.
+/.coverage
 .coverage.*
 htmlcov/
 *.egg-info/
 
-# Env / secrets
-.env
+# Local env overrides (plagcheck/.env itself is tracked; a real deployment
+# should override its placeholder credentials via .env.local, never commit it)
 .env.local
 
 # Logs

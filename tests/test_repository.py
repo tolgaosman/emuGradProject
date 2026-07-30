@@ -29,7 +29,7 @@ def test_json_fallback_round_trip(tmp_path, monkeypatch):
 
     scan_uuid = repo.save_scan("cosine", 0.70, _files_meta(), _matrix())
     record = repo.get_scan(scan_uuid)
-
+    assert record is not None
     assert record["scan_uuid"] == scan_uuid
     assert record["algorithm"] == "cosine"
     assert record["threshold"] == 0.70
@@ -111,7 +111,7 @@ def test_load_db_reconstructs_record_from_rows(monkeypatch):
     monkeypatch.setattr(repo, "_get_connection", lambda: fake_conn)
 
     record = repo.get_scan("uuid-1")
-
+    assert record is not None
     assert record["scan_uuid"] == "uuid-1"
     assert record["algorithm"] == "cosine"
     assert record["threshold"] == 0.70
@@ -166,4 +166,5 @@ def test_save_scan_falls_back_to_json_on_db_error(tmp_path, monkeypatch):
     # get_scan should now read from JSON since the DB mock has no real data.
     monkeypatch.setattr(repo, "_get_connection", lambda: None)
     record = repo.get_scan(scan_uuid)
+    assert record is not None
     assert record["scan_uuid"] == scan_uuid

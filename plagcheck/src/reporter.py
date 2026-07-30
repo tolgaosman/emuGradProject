@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
 
 from .matrix import ComparisonMatrix  # noqa: E402
 
@@ -69,7 +70,7 @@ class ReportGenerator:
             for j in range(n):
                 if i != j and m.get(i, j) >= threshold:
                     ax.add_patch(
-                        plt.Rectangle((j, i), 1, 1, fill=False, edgecolor="red", lw=2)
+                        Rectangle((j, i), 1, 1, fill=False, edgecolor="red", lw=2)
                     )
         buf = io.BytesIO()
         plt.tight_layout()
@@ -87,9 +88,8 @@ class ReportGenerator:
         preprocessor,
     ) -> str:
         flagged = m.get_flagged(thr)
-        can_highlight = file_data is not None and preprocessor is not None
         body = _render_summary(flagged, thr)
-        if can_highlight:
+        if file_data is not None and preprocessor is not None:
             body += _render_pairs(flagged, file_data, preprocessor)
         else:
             body += _render_flat_table(flagged)

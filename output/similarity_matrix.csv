@@ -1,3 +1,5 @@
-,sample_code_a.py,sample_code_b.py
-sample_code_a.py,1.0000,0.9876
-sample_code_b.py,0.9876,1.0000
+,sample_a.txt,sample_b.txt,sample_code_a.py,sample_code_b.py
+sample_a.txt,1.0000,0.4163,0.0000,0.0000
+sample_b.txt,0.4163,1.0000,0.0000,0.0000
+sample_code_a.py,0.0000,0.0000,1.0000,0.4772
+sample_code_b.py,0.0000,0.0000,0.4772,1.0000

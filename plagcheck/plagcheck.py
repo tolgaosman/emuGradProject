@@ -67,7 +67,12 @@ def main():
     files_meta = []
 
     print(f"Loading {len(args.files)} files...")
-    for path in args.files:
+    for raw_path in args.files:
+        # Resolve to an absolute path first. The loader rejects '..' as a path
+        # component to stop traversal from untrusted API input, but a CLI
+        # operator legitimately passes relative paths like ../samples/a.txt,
+        # and they already have shell-level filesystem access anyway.
+        path = os.path.abspath(raw_path)
         try:
             raw_text = loader.load(path)
             is_python = path.lower().endswith(".py")

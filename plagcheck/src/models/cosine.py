@@ -19,7 +19,10 @@ class CosineModel(SimilarityModel):
         vectorizer = TfidfVectorizer()
         try:
             tfidf_matrix = vectorizer.fit_transform([text_a, text_b])
-            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
-            return float(similarity[0][0])
+            # Compare the full pair matrix rather than slicing it (fit_transform
+            # is typed as the abstract `spmatrix`, which has no __getitem__ even
+            # though the concrete csr_matrix supports it at runtime).
+            similarity = cosine_similarity(tfidf_matrix)
+            return float(similarity[0][1])
         except ValueError:  # Empty vocabulary usually
             return 0.0

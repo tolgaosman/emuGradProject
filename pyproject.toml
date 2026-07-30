@@ -34,3 +34,17 @@ addopts = "-ra --cov=plagcheck/src --cov-report=term-missing --cov-fail-under=90
 
 [tool.coverage.run]
 source = ["plagcheck/src"]
+
+[tool.pyrefly]
+python-interpreter-path = "plagcheck/venv/Scripts/python.exe"
+python-version = "3.12"
+python-platform = "win32"
+search-path = ["plagcheck", "plagcheck/src"]
+project-excludes = [
+    "**/plagcheck/venv/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/web/**",
+    "**/output/**",
+    "**/samples/**",
+]

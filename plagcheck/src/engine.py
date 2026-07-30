@@ -4,13 +4,18 @@ import itertools
 from .matrix import ComparisonMatrix
 from .models import ASTModel, CosineModel, JaccardModel, WinnowingModel
 
-#: Fixed weights for the "all" blended algorithm. The three text-based
-#: models always contribute; AST only contributes when both files in the
-#: pair are Python, so its weight is redistributed proportionally across
-#: the remaining models for that pair (see `_compute_all`). This keeps a
-#: mixed batch's "all" scores comparable pair-to-pair, unlike a plain
-#: average whose denominator silently shrinks when AST is skipped.
-_ALL_WEIGHTS = {"cosine": 0.35, "winnowing": 0.35, "jaccard": 0.15, "ast": 0.15}
+#: Fixed weights for the "all" blended algorithm.
+#:
+#: AST carries the largest share for Python pairs because it is the only
+#: rename-invariant signal: a plagiarist who renames every identifier drives
+#: the three text models toward zero while the AST score stays near 1.0.
+#: Under-weighting it would make "all" miss precisely the case AST exists to
+#: catch. AST is dropped entirely for non-Python pairs, and its weight is
+#: then redistributed proportionally across the text models (see
+#: `_compute_all`) so a mixed batch's scores stay comparable pair-to-pair —
+#: unlike a plain average, whose denominator silently shrinks when AST is
+#: skipped.
+_ALL_WEIGHTS = {"cosine": 0.25, "winnowing": 0.25, "jaccard": 0.10, "ast": 0.40}
 
 
 class AlgorithmEngine:
