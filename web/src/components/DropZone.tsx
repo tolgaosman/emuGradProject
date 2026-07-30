@@ -1,9 +1,11 @@
 import { useCallback, useId, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
-import type { Mode } from '../api/types'
+import { detectLanguage } from '../api/client'
+import type { Language, Mode } from '../api/types'
 
 const MAX_BYTES = 10 * 1024 * 1024
 const MAX_FILES = 50
+const PASTE_CHAR_LIMIT = 15_000
 
 interface FileRejection {
   name: string
@@ -15,6 +17,25 @@ interface DropZoneProps {
   onFilesChange: (files: File[]) => void
   disabled?: boolean
   mode?: Mode
+}
+
+const TEXT_EXTENSIONS = ['.txt', '.pdf', '.docx']
+const CODE_EXTENSIONS = ['.py', '.java', '.c', '.h', '.cpp', '.cc', '.hpp']
+
+const LANGUAGE_EXTENSION: Record<Language, string> = {
+  python: '.py',
+  java: '.java',
+  c: '.c',
+  cpp: '.cpp',
+  text: '.txt',
+}
+
+const LANGUAGE_LABEL: Record<Language, string> = {
+  python: 'Python',
+  java: 'Java',
+  c: 'C',
+  cpp: 'C++',
+  text: 'Text',
 }
 
 function formatBytes(bytes: number): string {
@@ -33,41 +54,46 @@ export function DropZone({ files, onFilesChange, disabled, mode }: DropZoneProps
   const [rejections, setRejections] = useState<FileRejection[]>([])
   const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload')
   const [pastedText, setPastedText] = useState('')
+  const [detected, setDetected] = useState<Language | null>(null)
+  const [detecting, setDetecting] = useState(false)
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
 
   const isTextMode = mode === 'ai_text' || mode === 'text_similarity'
-  const supportedExtensions = isTextMode ? ['.txt', '.pdf', '.docx'] : ['.txt', '.py', '.pdf', '.docx']
-  const extensionsDisplay = isTextMode ? '.txt · .pdf · .docx' : '.txt · .py · .pdf · .docx'
+  const supportedExtensions = isTextMode ? TEXT_EXTENSIONS : CODE_EXTENSIONS
+  const extensionsDisplay = supportedExtensions.join(' · ')
 
-  const validate = useCallback((candidate: File[], existingCount: number): { accepted: File[]; rejections: FileRejection[] } => {
-    const accepted: File[] = []
-    const newRejections: FileRejection[] = []
-    let count = existingCount
+  const validate = useCallback(
+    (candidate: File[], existingCount: number): { accepted: File[]; rejections: FileRejection[] } => {
+      const accepted: File[] = []
+      const newRejections: FileRejection[] = []
+      let count = existingCount
 
-    for (const file of candidate) {
-      if (!supportedExtensions.includes(extensionOf(file.name))) {
-        newRejections.push({ name: file.name, reason: 'Unsupported format for selected mode' })
-        continue
+      for (const file of candidate) {
+        if (!supportedExtensions.includes(extensionOf(file.name))) {
+          newRejections.push({ name: file.name, reason: 'Unsupported format for selected mode' })
+          continue
+        }
+        if (file.size === 0) {
+          newRejections.push({ name: file.name, reason: 'File is empty' })
+          continue
+        }
+        if (file.size > MAX_BYTES) {
+          newRejections.push({ name: file.name, reason: 'Exceeds 10 MB limit' })
+          continue
+        }
+        if (count >= MAX_FILES) {
+          newRejections.push({ name: file.name, reason: `Batch limit of ${MAX_FILES} files reached` })
+          continue
+        }
+        accepted.push(file)
+        count += 1
       }
-      if (file.size === 0) {
-        newRejections.push({ name: file.name, reason: 'File is empty' })
-        continue
-      }
-      if (file.size > MAX_BYTES) {
-        newRejections.push({ name: file.name, reason: 'Exceeds 10 MB limit' })
-        continue
-      }
-      if (count >= MAX_FILES) {
-        newRejections.push({ name: file.name, reason: `Batch limit of ${MAX_FILES} files reached` })
-        continue
-      }
-      accepted.push(file)
-      count += 1
-    }
 
-    return { accepted, rejections: newRejections }
-  }, [supportedExtensions])
+      return { accepted, rejections: newRejections }
+    },
+    [supportedExtensions],
+  )
 
   const addFiles = useCallback(
     (incoming: FileList | File[]) => {
@@ -91,33 +117,72 @@ export function DropZone({ files, onFilesChange, disabled, mode }: DropZoneProps
     onFilesChange(next)
   }
 
+  const runDetection = useCallback(
+    (text: string) => {
+      if (isTextMode || !text.trim()) {
+        setDetected(null)
+        return
+      }
+      setDetecting(true)
+      detectLanguage(text)
+        .then((res) => setDetected(res.language))
+        .catch(() => setDetected(null))
+        .finally(() => setDetecting(false))
+    },
+    [isTextMode],
+  )
+
+  const handlePasteChange = (text: string) => {
+    setPastedText(text.slice(0, PASTE_CHAR_LIMIT))
+  }
+
+  const handlePasteBlur = () => {
+    runDetection(pastedText)
+  }
+
   const handlePasteSubmit = () => {
     if (!pastedText.trim()) return
-    const file = new File([pastedText], `pasted_text_${files.length + 1}.txt`, { type: 'text/plain' })
+    const language: Language = isTextMode ? 'text' : (detected ?? 'text')
+    const ext = LANGUAGE_EXTENSION[language]
+    const file = new File([pastedText], `pasted_${files.length + 1}${ext}`, { type: 'text/plain' })
     addFiles([file])
     setPastedText('')
+    setDetected(null)
     setActiveTab('upload')
   }
 
   return (
-    <div className="dropzone-wrap">
-      <div className="dropzone-tabs" style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
-        <button
-          type="button"
-          className={`btn ${activeTab === 'upload' ? 'btn-primary' : 'btn-ghost'}`}
-          onClick={() => setActiveTab('upload')}
-          disabled={disabled}
-        >
-          Upload Files
-        </button>
-        <button
-          type="button"
-          className={`btn ${activeTab === 'paste' ? 'btn-primary' : 'btn-ghost'}`}
-          onClick={() => setActiveTab('paste')}
-          disabled={disabled}
-        >
-          Paste Text
-        </button>
+    <div className="card">
+      <div className="card-head">
+        <span className="card-title">Staged files ({files.length})</span>
+        <div className="dropzone-tabs">
+          <button
+            type="button"
+            className={`tab-btn${activeTab === 'upload' ? ' tab-btn-active' : ''}`}
+            onClick={() => setActiveTab('upload')}
+            disabled={disabled}
+          >
+            Upload
+          </button>
+          <button
+            type="button"
+            className={`tab-btn${activeTab === 'paste' ? ' tab-btn-active' : ''}`}
+            onClick={() => setActiveTab('paste')}
+            disabled={disabled}
+          >
+            Paste
+          </button>
+          {files.length > 0 && (
+            <button
+              type="button"
+              className="tab-btn dropzone-clear"
+              onClick={() => onFilesChange([])}
+              disabled={disabled}
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {activeTab === 'upload' ? (
@@ -131,14 +196,12 @@ export function DropZone({ files, onFilesChange, disabled, mode }: DropZoneProps
           onDrop={handleDrop}
         >
           <label htmlFor={inputId} className="dropzone-label">
-            <div className="dropzone-icon" aria-hidden="true">
-              ⇪
-            </div>
-            <p className="dropzone-title">Drop files to compare</p>
-            <p className="dropzone-hint">
-              {extensionsDisplay} — up to 10 MB each, {MAX_FILES} files max
-            </p>
-            <span className="btn btn-secondary dropzone-browse">Browse files</span>
+            <span className="dropzone-plus" aria-hidden="true">
+              +
+            </span>
+            <span className="dropzone-hint">
+              Add files… <em>{extensionsDisplay} — 10 MB max, {MAX_FILES} files</em>
+            </span>
           </label>
           <input
             ref={inputRef}
@@ -157,34 +220,50 @@ export function DropZone({ files, onFilesChange, disabled, mode }: DropZoneProps
         <div className="paste-area">
           <textarea
             value={pastedText}
-            onChange={(e) => setPastedText(e.target.value)}
+            onChange={(e) => handlePasteChange(e.target.value)}
+            onBlur={handlePasteBlur}
             disabled={disabled}
-            placeholder="Paste your text here (up to 15,000 characters)..."
-            maxLength={15000}
-            style={{
-              width: '100%',
-              minHeight: '200px',
-              padding: '1rem',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              fontFamily: 'inherit',
-              resize: 'vertical',
-              marginBottom: '1rem'
-            }}
+            placeholder={
+              isTextMode
+                ? 'Paste your text here (up to 15,000 characters)…'
+                : 'Paste your code here (up to 15,000 characters)…'
+            }
+            maxLength={PASTE_CHAR_LIMIT}
           />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              {pastedText.length} / 15,000 characters
+          <div className="paste-area-footer">
+            <span className="paste-area-count">
+              {pastedText.length} / {PASTE_CHAR_LIMIT.toLocaleString()} characters
+              {!isTextMode && (
+                <span className="paste-area-language">
+                  {detecting
+                    ? ' · detecting…'
+                    : detected
+                      ? ` · detected ${LANGUAGE_LABEL[detected]}`
+                      : ''}
+                </span>
+              )}
             </span>
+            {!isTextMode && (
+              <select
+                aria-label="Override detected language"
+                value={detected ?? ''}
+                disabled={disabled || !pastedText.trim()}
+                onChange={(e) => setDetected((e.target.value || null) as Language | null)}
+              >
+                <option value="">Auto-detect</option>
+                <option value="python">Python</option>
+                <option value="java">Java</option>
+                <option value="c">C</option>
+                <option value="cpp">C++</option>
+              </select>
+            )}
             <button
               type="button"
               className="btn btn-secondary"
               onClick={handlePasteSubmit}
               disabled={disabled || !pastedText.trim()}
             >
-              Add as Text File
+              Add
             </button>
           </div>
         </div>

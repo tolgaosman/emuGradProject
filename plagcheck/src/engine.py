@@ -22,6 +22,19 @@ _CODE_WINNOWING_WEIGHT = 0.30
 _TEXT_COSINE_WEIGHT = 0.50
 _TEXT_WINNOWING_WEIGHT = 0.50
 
+#: Algorithms selectable per similarity mode, in UI display order. "auto" is
+#: the mode's designed blend (see weights above); the rest force a single
+#: named model, for demoing/reviewing each one individually. AST needs raw
+#: Python source (`data["raw"]`, not `data["tokens"]`) and always scores 0.0
+#: on non-Python input — callers should disable that choice for non-Python
+#: pairs rather than surface a misleading zero.
+ALGORITHMS_BY_MODE: dict[str, list[str]] = {
+    "code_similarity": ["auto", "ast", "winnowing", "jaccard"],
+    "text_similarity": ["auto", "cosine", "winnowing", "jaccard"],
+    "ai_code": [],
+    "ai_text": [],
+}
+
 
 @dataclass
 class ScanResult:
@@ -36,6 +49,7 @@ class ScanResult:
 
     mode: str
     names: list[str]
+    algorithm: str = "auto"
     matrix: ComparisonMatrix | None = None
     similarity_indices: dict[str, float] = field(default_factory=dict)
     source_breakdowns: dict[str, list[dict]] = field(default_factory=dict)
@@ -50,9 +64,16 @@ class ScanResult:
 class ScanEngine:
     """Orchestrates similarity and AI scans over a batch of files."""
 
-    def __init__(self, mode: str = "text_similarity"):
-        """Select which mode to run (code_similarity, text_similarity, ai_code, ai_text)."""
+    def __init__(self, mode: str = "text_similarity", algorithm: str = "auto"):
+        """Select which mode to run, and optionally force a single algorithm.
+
+        `algorithm="auto"` (default) runs the mode's designed blend. Any
+        other value (`ast`, `cosine`, `winnowing`, `jaccard`) forces that one
+        model instead, for `code_similarity`/`text_similarity` only — AI
+        modes ignore `algorithm` entirely.
+        """
         self.mode = mode.lower()
+        self.algorithm = algorithm.lower()
         self.models = {
             "cosine": CosineModel(),
             "winnowing": WinnowingModel(),
@@ -74,7 +95,7 @@ class ScanEngine:
         computed (they need the stemmer/stopword set to find matched spans).
         """
         names = list(file_data.keys())
-        result = ScanResult(mode=self.mode, names=names)
+        result = ScanResult(mode=self.mode, names=names, algorithm=self.algorithm)
 
         if self.mode in ("ai_code", "ai_text"):
             detector = self.models["ai"]
@@ -107,6 +128,12 @@ class ScanEngine:
         return result
 
     def _compute_pair(self, data_a: dict, data_b: dict) -> float:
+        if self.algorithm == "ast":
+            return self.models["ast"].compute([data_a["raw"]], [data_b["raw"]])
+        if self.algorithm in ("cosine", "winnowing", "jaccard"):
+            return self.models[self.algorithm].compute(data_a["tokens"], data_b["tokens"])
+
+        # algorithm == "auto": the mode's designed blend.
         if self.mode == "code_similarity":
             if data_a.get("language") == "python" and data_b.get("language") == "python":
                 ast_score = self.models["ast"].compute([data_a["raw"]], [data_b["raw"]])

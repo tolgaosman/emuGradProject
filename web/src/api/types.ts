@@ -1,6 +1,18 @@
 export type Mode = 'code_similarity' | 'text_similarity' | 'ai_code' | 'ai_text'
 export type Language = 'text' | 'python' | 'java' | 'c' | 'cpp'
 export type AIBand = 'low' | 'possible' | 'likely'
+export type Algorithm = 'auto' | 'cosine' | 'winnowing' | 'jaccard' | 'ast'
+
+export interface AlgorithmsResponse {
+  algorithms: Algorithm[]
+  by_mode: Record<Mode, Algorithm[]>
+}
+
+export interface StatusResponse {
+  status: string
+  service: string
+  version: string
+}
 
 export interface SimilarityPair {
   file_a: string
@@ -48,6 +60,7 @@ export interface SourceContribution {
 export interface CheckResponse {
   scan_id: string
   mode: Mode
+  algorithm: Algorithm
   threshold: number
   min_match_words: number
   matrix: ScanMatrix | null

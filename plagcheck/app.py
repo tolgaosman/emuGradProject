@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from src.audit import AuditLogger
-from src.engine import ScanEngine
+from src.engine import ALGORITHMS_BY_MODE, ScanEngine
 from src.language import MODES, detect_language, is_allowed_for_mode, language_for_extension
 from src.loader import MAX_BYTES, MAX_FILES, FileLoader, FileLoadError
 from src.matrix import ComparisonMatrix
@@ -70,13 +70,28 @@ def _load_raw_texts(scan_uuid: str) -> dict | None:
 @app.route("/api/status", methods=["GET"])
 def api_status():
     """Liveness check."""
-    return jsonify({"status": "ok", "service": "plagcheck", "version": "3.0.0"})
+    return jsonify({"status": "ok", "service": "plagcheck", "version": "3.1.0"})
 
 
 @app.route("/api/modes", methods=["GET"])
 def api_modes():
     """List the available scanning modes."""
     return jsonify({"modes": sorted(VALID_MODES)})
+
+
+@app.route("/api/algorithms", methods=["GET"])
+def api_algorithms():
+    """List the algorithm choices selectable per mode.
+
+    "auto" is each similarity mode's designed blend (see `engine.py`'s
+    `_CODE_*_WEIGHT` / `_TEXT_*_WEIGHT`); the rest force a single named
+    model, for demoing/reviewing each algorithm individually. AI modes have
+    no algorithm choice at all.
+    """
+    return jsonify({
+        "algorithms": sorted({a for choices in ALGORITHMS_BY_MODE.values() for a in choices}),
+        "by_mode": ALGORITHMS_BY_MODE,
+    })
 
 
 @app.route("/api/detect-language", methods=["POST"])
@@ -110,6 +125,7 @@ def api_check():
     mode = request.form.get(
         "mode", os.environ.get("DEFAULT_MODE", "text_similarity")
     ).lower()
+    algorithm = request.form.get("algorithm", "auto").lower()
 
     try:
         threshold = float(
@@ -138,6 +154,22 @@ def api_check():
             "invalid_mode",
             400,
             choices=sorted(VALID_MODES),
+        )
+
+    mode_algorithms = ALGORITHMS_BY_MODE.get(mode, [])
+    if mode_algorithms and algorithm not in mode_algorithms:
+        return _error(
+            f"Algorithm '{algorithm}' is not available for mode '{mode}'.",
+            "invalid_algorithm",
+            400,
+            choices=mode_algorithms,
+        )
+    if not mode_algorithms and algorithm != "auto":
+        return _error(
+            f"Mode '{mode}' has no selectable algorithm.",
+            "invalid_algorithm",
+            400,
+            choices=["auto"],
         )
 
     if not (0.0 < threshold < 1.0):
@@ -208,7 +240,7 @@ def api_check():
             file_errors=errors,
         )
 
-    engine = ScanEngine(mode=mode)
+    engine = ScanEngine(mode=mode, algorithm=algorithm)
     result = engine.compute(file_data, preprocessor=preprocessor, min_match_words=min_match_words)
 
     matrix_payload = None
@@ -248,6 +280,7 @@ def api_check():
     return jsonify({
         "scan_id": scan_uuid,
         "mode": mode,
+        "algorithm": algorithm,
         "threshold": threshold,
         "min_match_words": min_match_words,
         "matrix": matrix_payload,

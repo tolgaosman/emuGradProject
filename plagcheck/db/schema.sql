@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS scan_algorithm (
 ALTER TABLE scan_algorithm DROP CONSTRAINT IF EXISTS chk_algorithm_name;
 ALTER TABLE scan_algorithm ADD CONSTRAINT chk_algorithm_name CHECK (
  algorithm_name IN (
-   'cosine','winnowing','jaccard','ast','all',
+   'cosine','winnowing','jaccard','ast','all','auto',
    'code_similarity','text_similarity','ai_code','ai_text'
  )
 );

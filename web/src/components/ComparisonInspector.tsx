@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getPair } from '../api/client'
 import type { PairResponse } from '../api/types'
+import { CodePane } from './CodePane'
 import { SkeletonLoader } from './SkeletonLoader'
 
 interface ComparisonInspectorProps {
@@ -11,24 +12,14 @@ interface ComparisonInspectorProps {
   onClose: () => void
 }
 
-function renderHighlighted(text: string, spans: [number, number][]) {
-  if (spans.length === 0) return text
-  const nodes: React.ReactNode[] = []
-  let cursor = 0
-  spans.forEach(([start, end], i) => {
-    if (start > cursor) nodes.push(text.slice(cursor, start))
-    nodes.push(<mark key={i}>{text.slice(start, end)}</mark>)
-    cursor = end
-  })
-  if (cursor < text.length) nodes.push(text.slice(cursor))
-  return nodes
-}
-
+/** Inline side-by-side comparison card, rendered in the results column
+ * below the similarity matrix (not a modal) — matches the mockup's
+ * `84% Match` panel. */
 export function ComparisonInspector({ scanId, fileA, fileB, score, onClose }: ComparisonInspectorProps) {
   const [data, setData] = useState<PairResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const paneA = useRef<HTMLPreElement>(null)
-  const paneB = useRef<HTMLPreElement>(null)
+  const paneA = useRef<HTMLDivElement>(null)
+  const paneB = useRef<HTMLDivElement>(null)
   const syncing = useRef(false)
 
   useEffect(() => {
@@ -67,44 +58,40 @@ export function ComparisonInspector({ scanId, fileA, fileB, score, onClose }: Co
   }
 
   return (
-    <div className="inspector-overlay" onClick={onClose}>
-      <div className="inspector-panel" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <header className="inspector-header">
-          <div>
-            <h3>
-              {fileA} <span className="inspector-vs">↔</span> {fileB}
-            </h3>
-            <span className={`badge ${score >= 0.9 ? 'badge-high' : 'badge-mid'}`}>
-              {score.toFixed(4)}
-            </span>
-          </div>
+    <div className="card inspector-card">
+      <div className="card-head inspector-head">
+        <h3>
+          {fileA} <span className="inspector-vs">↔</span> {fileB}
+        </h3>
+        <div className="inspector-head-right">
+          <span className={`badge ${score >= 0.9 ? 'badge-high' : 'badge-mid'}`}>
+            {Math.round(score * 100)}% Match
+          </span>
           <button type="button" className="inspector-close" aria-label="Close" onClick={onClose}>
             ×
           </button>
-        </header>
-
-        {error && <div className="inspector-error">{error}</div>}
-        {!data && !error && <SkeletonLoader label="Loading comparison…" />}
-
-        {data && (
-          <div className="inspector-panes">
-            <pre
-              className="inspector-pane"
-              ref={paneA}
-              onScroll={() => syncScroll('a')}
-            >
-              <code>{renderHighlighted(data.file_a.text, data.file_a.matched_spans)}</code>
-            </pre>
-            <pre
-              className="inspector-pane"
-              ref={paneB}
-              onScroll={() => syncScroll('b')}
-            >
-              <code>{renderHighlighted(data.file_b.text, data.file_b.matched_spans)}</code>
-            </pre>
-          </div>
-        )}
+        </div>
       </div>
+
+      {error && <div className="inspector-error">{error}</div>}
+      {!data && !error && <SkeletonLoader label="Loading comparison…" />}
+
+      {data && (
+        <div className="inspector-panes">
+          <CodePane
+            text={data.file_a.text}
+            spans={data.file_a.matched_spans.map(([start, end]) => ({ start, end }))}
+            paneRef={paneA}
+            onScroll={() => syncScroll('a')}
+          />
+          <CodePane
+            text={data.file_b.text}
+            spans={data.file_b.matched_spans.map(([start, end]) => ({ start, end }))}
+            paneRef={paneB}
+            onScroll={() => syncScroll('b')}
+          />
+        </div>
+      )}
     </div>
   )
 }

@@ -16,6 +16,7 @@ from datetime import datetime
 import psycopg2
 
 from .engine import ScanResult
+from .language import MODES
 
 _SYSTEM_USER_EMAIL = "system@plagcheck.local"
 _JSON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "output", "scans"))
@@ -132,6 +133,7 @@ class ScanRepository:
         return {
             "scan_uuid": scan_uuid,
             "algorithm": mode,
+            "algorithm_override": result.algorithm,
             "threshold": threshold,
             "status": "complete",
             "timestamp": datetime.now().isoformat(),
@@ -170,6 +172,17 @@ class ScanRepository:
                 "INSERT INTO scan_algorithm (scan_id, algorithm_name) VALUES (%s, %s)",
                 (scan_id, record["algorithm"]),
             )
+            # Also record the effective per-algorithm override (e.g. "ast"
+            # forced instead of the mode's default blend), when it differs
+            # from the mode name itself — scan_algorithm is a composite-PK
+            # table designed to hold more than one row per scan.
+            override = record.get("algorithm_override", "auto")
+            if override not in (record["algorithm"], None):
+                cur.execute(
+                    "INSERT INTO scan_algorithm (scan_id, algorithm_name) "
+                    "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (scan_id, override),
+                )
 
             file_ids: dict[str, int] = {}
             for f in record["files"]:
@@ -221,10 +234,18 @@ class ScanRepository:
             scan_id, threshold, status, timestamp = row
 
             cur.execute(
-                "SELECT algorithm_name FROM scan_algorithm WHERE scan_id = %s LIMIT 1", (scan_id,)
+                "SELECT algorithm_name FROM scan_algorithm WHERE scan_id = %s", (scan_id,)
             )
-            algo_row = cur.fetchone()
-            algorithm = algo_row[0] if algo_row else "text_similarity"
+            algo_names = [row[0] for row in cur.fetchall()]
+            modes_present = [a for a in algo_names if a in MODES]
+            if modes_present:
+                algorithm = modes_present[0]
+            elif algo_names:
+                algorithm = algo_names[0]
+            else:
+                algorithm = "text_similarity"
+            overrides = [a for a in algo_names if a != algorithm]
+            algorithm_override = overrides[0] if overrides else "auto"
 
             cur.execute(
                 "SELECT file_id, file_name, file_size_bytes, file_format, similarity_index "
@@ -273,6 +294,7 @@ class ScanRepository:
         return {
             "scan_uuid": scan_uuid,
             "algorithm": algorithm,
+            "algorithm_override": algorithm_override,
             "threshold": threshold,
             "status": status,
             "timestamp": timestamp.isoformat(),

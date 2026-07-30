@@ -100,3 +100,60 @@ def test_compute_without_preprocessor_skips_similarity_index():
     result = engine.compute(_file_data())
     assert result.similarity_indices == {}
     assert result.source_breakdowns == {}
+
+
+def test_algorithm_auto_is_default_and_echoed_on_result():
+    engine = ScanEngine(mode="text_similarity")
+    result = engine.compute(_file_data())
+    assert engine.algorithm == "auto"
+    assert result.algorithm == "auto"
+
+
+def test_forced_cosine_differs_from_auto_blend():
+    """Forcing a single algorithm produces a different score than the mode's
+    default blend, proving the override actually bypasses the blend logic."""
+    file_data = {
+        "a.txt": {
+            "raw": "the quick brown fox jumps over the lazy dog",
+            "tokens": ["quick", "brown", "fox", "jump", "lazi", "dog"],
+            "kgrams": [],
+            "language": "text",
+        },
+        "b.txt": {
+            "raw": "a swift brown fox leaps above a lazy dog",
+            "tokens": ["swift", "brown", "fox", "leap", "abov", "lazi", "dog"],
+            "kgrams": [],
+            "language": "text",
+        },
+    }
+    auto_matrix = ScanEngine(mode="text_similarity").compute(file_data).matrix
+    cosine_matrix = ScanEngine(mode="text_similarity", algorithm="cosine").compute(file_data).matrix
+    assert auto_matrix is not None
+    assert cosine_matrix is not None
+    assert auto_matrix.get(0, 1) != pytest.approx(cosine_matrix.get(0, 1))
+
+
+def test_forced_ast_on_non_python_pair_scores_zero_not_raises():
+    """AST needs raw Python source; forcing it on non-Python input degrades
+    to 0.0 instead of raising, since ast.parse() rejects non-Python syntax."""
+    file_data = {
+        "a.java": {
+            "raw": "public class A {}",
+            "tokens": ["public", "class", "a"],
+            "language": "java",
+        },
+        "b.java": {
+            "raw": "public class B {}",
+            "tokens": ["public", "class", "b"],
+            "language": "java",
+        },
+    }
+    result = ScanEngine(mode="code_similarity", algorithm="ast").compute(file_data)
+    assert result.matrix is not None
+    assert result.matrix.get(0, 1) == pytest.approx(0.0)
+
+
+def test_forced_algorithm_recorded_on_result():
+    engine = ScanEngine(mode="code_similarity", algorithm="winnowing")
+    result = engine.compute(_file_data())
+    assert result.algorithm == "winnowing"

@@ -156,9 +156,9 @@ def test_load_db_reconstructs_record_from_rows(monkeypatch):
     fake_cursor = MagicMock()
     fake_cursor.fetchone.side_effect = [
         (10, 0.70, "complete", datetime(2026, 1, 1, 12, 0, 0)),  # scan_request row
-        ("text_similarity",),  # scan_algorithm row
     ]
     fake_cursor.fetchall.side_effect = [
+        [("text_similarity",)],  # scan_algorithm rows
         [(1, "a.txt", 100, "txt", 0.5), (2, "b.txt", 200, "txt", None)],  # scan_file rows
         [(1, 2, 0.9, True)],  # scan_pair rows
         [],  # scan_ai_result rows
@@ -189,9 +189,9 @@ def test_load_db_reconstructs_ai_results(monkeypatch):
     fake_cursor = MagicMock()
     fake_cursor.fetchone.side_effect = [
         (10, 0.70, "complete", datetime(2026, 1, 1, 12, 0, 0)),
-        ("ai_text",),
     ]
     fake_cursor.fetchall.side_effect = [
+        [("ai_text",)],  # scan_algorithm rows
         [(1, "a.txt", 100, "txt", None)],
         [],  # no scan_pair rows for an AI-mode scan
         [(1, 0.42, "possible")],  # scan_ai_result rows
@@ -205,6 +205,31 @@ def test_load_db_reconstructs_ai_results(monkeypatch):
     assert record["ai_scores"] == [
         {"file": "a.txt", "overall_probability": 0.42, "band": "possible"}
     ]
+
+
+def test_load_db_reconstructs_algorithm_override(monkeypatch):
+    """A forced single algorithm is stored as a second scan_algorithm row and
+    surfaces as `algorithm_override` on read, distinct from the mode name."""
+    repo = ScanRepository()
+
+    fake_cursor = MagicMock()
+    fake_cursor.fetchone.side_effect = [
+        (10, 0.70, "complete", datetime(2026, 1, 1, 12, 0, 0)),
+    ]
+    fake_cursor.fetchall.side_effect = [
+        [("text_similarity",), ("cosine",)],  # mode row + forced-algorithm row
+        [(1, "a.txt", 100, "txt", None), (2, "b.txt", 200, "txt", None)],
+        [(1, 2, 0.9, True)],
+        [],
+    ]
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+    monkeypatch.setattr(repo, "_get_connection", lambda: fake_conn)
+
+    record = repo.get_scan("uuid-override")
+    assert record is not None
+    assert record["algorithm"] == "text_similarity"
+    assert record["algorithm_override"] == "cosine"
 
 
 def test_load_db_returns_none_when_scan_not_found(monkeypatch):

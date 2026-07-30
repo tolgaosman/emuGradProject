@@ -277,3 +277,59 @@ def test_check_similarity_index_in_response(client):
     assert resp.status_code == 200
     assert body["similarity_indices"]["a.txt"] > 0.0
     assert body["source_breakdowns"]["a.txt"][0]["source"] == "b.txt"
+
+
+def test_algorithms_lists_choices_per_mode(client):
+    resp = client.get("/api/algorithms")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["by_mode"]["text_similarity"] == ["auto", "cosine", "winnowing", "jaccard"]
+    assert body["by_mode"]["code_similarity"] == ["auto", "ast", "winnowing", "jaccard"]
+    assert body["by_mode"]["ai_text"] == []
+    assert "cosine" in body["algorithms"]
+
+
+def test_check_defaults_to_auto_algorithm_and_echoes_it(client):
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [_upload("a.txt", "hello world " * 10), _upload("b.txt", "hello world " * 10)],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    assert resp.get_json()["algorithm"] == "auto"
+
+
+def test_check_accepts_forced_algorithm(client):
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "algorithm": "cosine",
+        "files": [_upload("a.txt", "hello world " * 10), _upload("b.txt", "hello world " * 10)],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["algorithm"] == "cosine"
+
+
+def test_check_rejects_algorithm_not_valid_for_mode(client):
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "algorithm": "ast",
+        "files": [_upload("a.txt", "hello world"), _upload("b.txt", "hello world")],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "invalid_algorithm"
+
+
+def test_check_rejects_algorithm_for_ai_mode(client):
+    data = {
+        "mode": "ai_text",
+        "algorithm": "cosine",
+        "files": [_upload("a.txt", "hello world, this is a short essay about foxes.")],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "invalid_algorithm"
