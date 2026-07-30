@@ -57,6 +57,16 @@ export interface SourceContribution {
   spans: [number, number][]
 }
 
+/** One fetched web page compared against an uploaded file, from the
+ * "compare against the internet" feature (code_similarity/text_similarity
+ * only — see plagcheck/src/websearch.py). */
+export interface WebMatch {
+  query: string
+  url: string
+  title: string
+  score: number
+}
+
 export interface CheckResponse {
   scan_id: string
   mode: Mode
@@ -67,6 +77,11 @@ export interface CheckResponse {
   pairs: SimilarityPair[]
   similarity_indices: Record<string, number>
   source_breakdowns: Record<string, SourceContribution[]>
+  web_matches: Record<string, WebMatch[]>
+  /** True when include_web defaulted to on but the server has no
+   * WEB_SEARCH_API_KEY/WEB_SEARCH_ENGINE_ID configured — the scan still
+   * completed, just without internet comparison. */
+  web_search_unavailable: boolean
   ai_scores: AIScore[]
   errors: FileError[]
 }

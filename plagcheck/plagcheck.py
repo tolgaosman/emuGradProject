@@ -6,12 +6,13 @@ import uuid
 
 from dotenv import load_dotenv
 from src.audit import AuditLogger
-from src.engine import ScanEngine
+from src.engine import WEB_ELIGIBLE_MODES, ScanEngine
 from src.language import MODES, language_for_extension
 from src.loader import MAX_FILES, FileLoader
 from src.preprocessor import Preprocessor
 from src.reporter import ReportGenerator
 from src.repository import ScanRepository
+from src.websearch import WebSearchClient
 
 load_dotenv()
 
@@ -74,11 +75,36 @@ def main():
         default=None,
         help="Path to an academic exclusion list (default: config/exclusions.txt)",
     )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help=(
+            "Also compare against internet search results (code_similarity/"
+            "text_similarity only). Requires WEB_SEARCH_API_KEY and "
+            "WEB_SEARCH_ENGINE_ID in .env."
+        ),
+    )
 
     args = parser.parse_args()
     mode = _resolve_mode(args)
     is_ai = mode in ("ai_code", "ai_text")
-    min_files = 1 if is_ai else 2
+
+    web_client = None
+    if args.web:
+        if mode not in WEB_ELIGIBLE_MODES:
+            print(f"Error: --web has no effect in mode '{mode}' (ai_code/ai_text aren't web-eligible).")
+            return
+        api_key = os.environ.get("WEB_SEARCH_API_KEY", "")
+        engine_id = os.environ.get("WEB_SEARCH_ENGINE_ID", "")
+        if not (api_key and engine_id):
+            print(
+                "Error: --web requires WEB_SEARCH_API_KEY and WEB_SEARCH_ENGINE_ID to be set "
+                "in .env (see .env.example)."
+            )
+            return
+        web_client = WebSearchClient(api_key=api_key, engine_id=engine_id)
+
+    min_files = 1 if (is_ai or web_client is not None) else 2
 
     if not (0.01 <= args.threshold <= 0.99):
         print("Error: Threshold must be between 0.01 and 0.99")
@@ -129,9 +155,17 @@ def main():
         print(f"Error: Need at least {min_files} valid file(s) for mode '{mode}'.")
         return
 
-    print(f"Running '{mode}'...")
+    print(f"Running '{mode}'{' with --web' if web_client else ''}...")
     engine = ScanEngine(mode=mode)
-    result = engine.compute(file_data, preprocessor=preprocessor)
+    result = engine.compute(
+        file_data,
+        preprocessor=preprocessor,
+        web_client=web_client,
+        max_web_queries=int(os.environ.get("WEB_SEARCH_MAX_QUERIES_PER_SCAN", "5")),
+        web_budget_seconds=float(os.environ.get("WEB_SEARCH_BUDGET_SECONDS", "20")),
+    )
+    for warning in result.warnings:
+        print(f"Warning: {warning}")
 
     ScanRepository().save_scan(mode, args.threshold, files_meta, result, scan_uuid)
 
@@ -167,7 +201,34 @@ def main():
             print(f"  - {artifacts['html']}")
         print(f"  - {artifacts['heatmap']}")
 
+        if web_client is not None:
+            web_report_path = _report_web_matches(result, args.output)
+            print(f"  - {web_report_path}")
+
     audit.log("SCAN_COMPLETE", scan_uuid=scan_uuid, payload={"flagged_count": flagged_count})
+
+
+def _report_web_matches(result, output_dir: str) -> str:
+    """Print and persist each file's top internet-source matches.
+
+    Only called when `--web` was passed; writes web_matches.json alongside
+    the CSV/HTML/heatmap artifacts `ReportGenerator` already produced.
+    """
+    print("\nWeb matches (indicative — see README on internet-source scope):")
+    report = {}
+    for name in result.names:
+        matches = result.web_matches.get(name, [])
+        report[name] = [m.to_dict() for m in matches]
+        if not matches:
+            print(f"  {name}: no web matches found")
+            continue
+        for m in matches:
+            print(f"  {name}: {m.score:.4f}  {m.url}  (query: {m.query!r})")
+
+    path = os.path.join(output_dir, "web_matches.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    return path
 
 
 def _report_ai(result, output_dir: str) -> None:

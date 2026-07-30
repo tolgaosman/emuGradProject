@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from src.audit import AuditLogger
-from src.engine import ALGORITHMS_BY_MODE, ScanEngine
+from src.engine import ALGORITHMS_BY_MODE, WEB_ELIGIBLE_MODES, ScanEngine
 from src.language import MODES, detect_language, is_allowed_for_mode, language_for_extension
 from src.loader import MAX_BYTES, MAX_FILES, FileLoader, FileLoadError
 from src.matrix import ComparisonMatrix
@@ -16,6 +16,7 @@ from src.preprocessor import Preprocessor
 from src.reporter import ReportGenerator, matched_spans
 from src.repository import ScanRepository
 from src.similarity_index import DEFAULT_MIN_MATCH_WORDS
+from src.websearch import WebSearchClient
 from werkzeug.utils import secure_filename
 
 load_dotenv()
@@ -34,6 +35,9 @@ _TEXT_STORE_DIR = os.path.join(os.path.dirname(__file__), "..", "output", "scans
 
 #: Modes whose scan record has no pairwise matrix (see engine.ScanResult.is_ai).
 _AI_MODES = {"ai_code", "ai_text"}
+
+WEB_SEARCH_MAX_QUERIES_PER_SCAN = int(os.environ.get("WEB_SEARCH_MAX_QUERIES_PER_SCAN", "5"))
+WEB_SEARCH_BUDGET_SECONDS = float(os.environ.get("WEB_SEARCH_BUDGET_SECONDS", "20"))
 
 
 def _error(message: str, code: str, status: int, **extra):
@@ -127,6 +131,14 @@ def api_check():
     ).lower()
     algorithm = request.form.get("algorithm", "auto").lower()
 
+    include_web_raw = request.form.get("include_web")
+    include_web_explicit = include_web_raw is not None
+    include_web = (include_web_raw if include_web_explicit else "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     try:
         threshold = float(
             request.form.get("threshold", os.environ.get("DEFAULT_THRESHOLD", "0.70"))
@@ -176,7 +188,34 @@ def api_check():
         return _error("threshold must be between 0 and 1.", "invalid_threshold", 400)
 
     is_ai = mode in _AI_MODES
-    min_files = 1 if is_ai else 2
+
+    # Web comparison is on by default for the similarity modes (see
+    # websearch.py). If it's not configured on the server: an explicit
+    # `include_web=true` from the client is a hard error (the client asked
+    # for something the server can't do), but relying on the default just
+    # falls back to offline file-vs-file comparison — a scan shouldn't fail
+    # because nobody set an API key.
+    web_client = None
+    web_search_unavailable = False
+    if include_web and mode in WEB_ELIGIBLE_MODES:
+        api_key = os.environ.get("WEB_SEARCH_API_KEY", "")
+        engine_id = os.environ.get("WEB_SEARCH_ENGINE_ID", "")
+        if api_key and engine_id:
+            web_client = WebSearchClient(api_key=api_key, engine_id=engine_id)
+        elif include_web_explicit:
+            return _error(
+                "Web search is not configured on this server "
+                "(WEB_SEARCH_API_KEY / WEB_SEARCH_ENGINE_ID missing).",
+                "web_search_unavailable",
+                400,
+            )
+        else:
+            web_search_unavailable = True
+            include_web = False
+    else:
+        include_web = include_web and mode in WEB_ELIGIBLE_MODES
+
+    min_files = 1 if (is_ai or web_client is not None) else 2
 
     scan_uuid = str(uuid.uuid4())
     audit.log(
@@ -240,13 +279,29 @@ def api_check():
             file_errors=errors,
         )
 
+    def _on_web_query(query: str, result_count: int) -> None:
+        audit.log(
+            "WEB_SEARCH_QUERY",
+            scan_uuid=scan_uuid,
+            payload={"query": query, "result_count": result_count},
+        )
+
     engine = ScanEngine(mode=mode, algorithm=algorithm)
-    result = engine.compute(file_data, preprocessor=preprocessor, min_match_words=min_match_words)
+    result = engine.compute(
+        file_data,
+        preprocessor=preprocessor,
+        min_match_words=min_match_words,
+        web_client=web_client,
+        max_web_queries=WEB_SEARCH_MAX_QUERIES_PER_SCAN,
+        on_query=_on_web_query if web_client is not None else None,
+        web_budget_seconds=WEB_SEARCH_BUDGET_SECONDS,
+    )
 
     matrix_payload = None
     pairs_payload = []
     similarity_indices_payload = {}
     source_breakdowns_payload = {}
+    web_matches_payload = {}
     ai_scores = []
 
     if is_ai:
@@ -264,6 +319,9 @@ def api_check():
         ]
         similarity_indices_payload = result.similarity_indices
         source_breakdowns_payload = result.source_breakdowns
+        web_matches_payload = {
+            name: [m.to_dict() for m in matches] for name, matches in result.web_matches.items()
+        }
 
     repository.save_scan(mode, threshold, files_meta, result, scan_uuid)
     _save_raw_texts(scan_uuid, file_data)
@@ -287,6 +345,8 @@ def api_check():
         "pairs": pairs_payload,
         "similarity_indices": similarity_indices_payload,
         "source_breakdowns": source_breakdowns_payload,
+        "web_matches": web_matches_payload,
+        "web_search_unavailable": web_search_unavailable,
         "ai_scores": ai_scores,
         "errors": errors,
     })

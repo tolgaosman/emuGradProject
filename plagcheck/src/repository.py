@@ -130,6 +130,10 @@ class ScanRepository:
             ]
             ai_results = []
 
+        web_matches = {
+            name: [m.to_dict() for m in matches] for name, matches in result.web_matches.items()
+        }
+
         return {
             "scan_uuid": scan_uuid,
             "algorithm": mode,
@@ -141,6 +145,7 @@ class ScanRepository:
             "pairs": pairs,
             "ai_scores": ai_results,
             "source_breakdowns": result.source_breakdowns,
+            "web_matches": web_matches,
         }
 
     # -- PostgreSQL ------------------------------------------------------------
@@ -221,6 +226,25 @@ class ScanRepository:
                     (scan_id, file_id, ai_result["overall_probability"], ai_result["band"]),
                 )
 
+            for file_name, matches in record.get("web_matches", {}).items():
+                file_id = file_ids.get(file_name)
+                if file_id is None:
+                    continue
+                for match in matches:
+                    cur.execute(
+                        "INSERT INTO scan_web_match "
+                        "(scan_id, file_id, query, url, title, score) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (
+                            scan_id,
+                            file_id,
+                            match["query"],
+                            match["url"],
+                            match["title"],
+                            match["score"],
+                        ),
+                    )
+
     def _load_db(self, conn, scan_uuid: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute(
@@ -291,6 +315,19 @@ class ScanRepository:
                 if file_id in files
             ]
 
+            cur.execute(
+                "SELECT file_id, query, url, title, score FROM scan_web_match "
+                "WHERE scan_id = %s",
+                (scan_id,),
+            )
+            web_matches: dict[str, list[dict]] = {}
+            for file_id, query, url, title, score in cur.fetchall():
+                if file_id not in files:
+                    continue
+                web_matches.setdefault(files[file_id]["file_name"], []).append(
+                    {"query": query, "url": url, "title": title, "score": float(score)}
+                )
+
         return {
             "scan_uuid": scan_uuid,
             "algorithm": algorithm,
@@ -305,6 +342,7 @@ class ScanRepository:
             # (see the docstring on scan_ai_result) — only available for
             # scans that are still in the JSON fallback / same-process cache.
             "source_breakdowns": {},
+            "web_matches": web_matches,
         }
 
     # -- JSON fallback -----------------------------------------------------

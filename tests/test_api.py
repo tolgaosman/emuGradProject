@@ -3,6 +3,7 @@ import io
 
 import app as app_module
 import pytest
+from src.websearch import SearchResult
 
 
 @pytest.fixture
@@ -14,8 +15,26 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module.repository, "json_dir", str(tmp_path / "scans"))
     monkeypatch.setattr(app_module, "_TEXT_STORE_DIR", str(tmp_path / "texts"))
     monkeypatch.setattr(app_module.audit, "_get_connection", lambda: None)
+    # Web search is unconfigured by default in tests, regardless of what's in
+    # the developer's .env — tests that need it set fake credentials
+    # themselves alongside a mocked WebSearchClient.
+    monkeypatch.delenv("WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_SEARCH_ENGINE_ID", raising=False)
     app_module.app.config["TESTING"] = True
     return app_module.app.test_client()
+
+
+class _FakeWebClient:
+    """Test double for WebSearchClient — no network calls."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def search(self, query, max_results=5):
+        return [SearchResult(url="https://example.com/hit", title="Hit", snippet="")]
+
+    def fetch_page_text(self, url, max_bytes=2_000_000):
+        return "the quick brown fox jumps over the lazy dog near the water today"
 
 
 def _upload(name: str, content: str):
@@ -333,3 +352,97 @@ def test_check_rejects_algorithm_for_ai_mode(client):
     resp = client.post("/api/check", data=data, content_type="multipart/form-data")
     assert resp.status_code == 400
     assert resp.get_json()["code"] == "invalid_algorithm"
+
+
+# -- web-source comparison ---------------------------------------------------
+
+
+def test_check_include_web_default_no_credentials_degrades_not_fails(client):
+    """include_web defaults to true, but with no server credentials the scan
+    still completes — it just falls back to offline comparison instead of a
+    hard error, since a normal file-vs-file scan shouldn't fail because
+    nobody configured a search API key."""
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [_upload("a.txt", "hello world " * 10), _upload("b.txt", "hello world " * 10)],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["web_search_unavailable"] is True
+    assert body["web_matches"] == {}
+
+
+def test_check_explicit_include_web_no_credentials_is_hard_error(client):
+    """Explicitly asking for include_web=true when the server has no
+    credentials is a client-visible error, unlike the silent default-true
+    fallback above — the client asked for something the server can't do."""
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "include_web": "true",
+        "files": [_upload("a.txt", "hello world " * 10), _upload("b.txt", "hello world " * 10)],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "web_search_unavailable"
+
+
+def test_check_include_web_false_skips_even_with_credentials(client, monkeypatch):
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "fake-key")
+    monkeypatch.setenv("WEB_SEARCH_ENGINE_ID", "fake-cx")
+    monkeypatch.setattr(app_module, "WebSearchClient", _FakeWebClient)
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "include_web": "false",
+        "files": [_upload("a.txt", "hello world " * 10), _upload("b.txt", "hello world " * 10)],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["web_search_unavailable"] is False
+    assert body["web_matches"] == {}
+
+
+def test_check_web_enabled_single_file_accepted_and_populates_web_matches(client, monkeypatch):
+    """With credentials configured (mocked, no real network), a single
+    uploaded file is now enough for a similarity-mode scan — the internet
+    stands in for the second file."""
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "fake-key")
+    monkeypatch.setenv("WEB_SEARCH_ENGINE_ID", "fake-cx")
+    monkeypatch.setattr(app_module, "WebSearchClient", _FakeWebClient)
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [
+            _upload(
+                "a.txt",
+                "The quick brown fox jumps over the lazy dog near the water today, "
+                "a distinctive sentence used for testing purposes here.",
+            )
+        ],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["web_search_unavailable"] is False
+    assert body["web_matches"]["a.txt"]
+    assert body["web_matches"]["a.txt"][0]["url"] == "https://example.com/hit"
+
+
+def test_check_web_ineligible_mode_ignores_include_web(client, monkeypatch):
+    """ai_text is never web-eligible; include_web is simply irrelevant there,
+    not an error, and doesn't relax that mode's own 1-file minimum further."""
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "fake-key")
+    monkeypatch.setenv("WEB_SEARCH_ENGINE_ID", "fake-cx")
+    monkeypatch.setattr(app_module, "WebSearchClient", _FakeWebClient)
+    data = {
+        "mode": "ai_text",
+        "files": [_upload("a.txt", "A short passage of ordinary prose about nothing much.")],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["web_matches"] == {}

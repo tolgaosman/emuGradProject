@@ -1,6 +1,8 @@
 """ test_engine.py — ScanEngine pairwise computation. """
 import pytest
 from src.engine import ScanEngine
+from src.preprocessor import Preprocessor
+from src.websearch import SearchResult, WebSearchError
 
 
 def _file_data():
@@ -157,3 +159,168 @@ def test_forced_algorithm_recorded_on_result():
     engine = ScanEngine(mode="code_similarity", algorithm="winnowing")
     result = engine.compute(_file_data())
     assert result.algorithm == "winnowing"
+
+
+# -- web-source comparison ---------------------------------------------------
+
+
+class _FakeWebClient:
+    """Test double standing in for a real WebSearchClient.
+
+    `pages_by_query` maps each query string to a list of (url, title, text)
+    tuples; `search()`/`fetch_page_text()` never touch the network.
+    """
+
+    def __init__(self, pages_by_query: dict, raise_search_for: set[str] | None = None):
+        self.pages_by_query = pages_by_query
+        self.raise_search_for = raise_search_for or set()
+        self.fetched_urls: list[str] = []
+
+    def search(self, query, max_results=5):
+        if query in self.raise_search_for:
+            raise WebSearchError(f"no results for {query!r}")
+        return [
+            SearchResult(url=url, title=title, snippet="")
+            for url, title, _text in self.pages_by_query.get(query, [])
+        ][:max_results]
+
+    def fetch_page_text(self, url, max_bytes=2_000_000):
+        self.fetched_urls.append(url)
+        for pages in self.pages_by_query.values():
+            for page_url, _title, text in pages:
+                if page_url == url:
+                    return text
+        raise WebSearchError(f"no such page {url!r}")
+
+
+def _web_file_data():
+    # Tokens are generated via the real Preprocessor, not hand-picked, so a
+    # fetched web page containing the exact same raw text tokenizes
+    # identically and scores 1.0 — a hand-written token list would silently
+    # diverge from what the pipeline actually produces for that text.
+    # Winnowing also needs >= k + w - 1 (5 + 4 - 1 = 8) tokens to produce any
+    # fingerprint at all (see test_code_similarity_python_pair_uses_ast for
+    # the same gotcha), so each sentence uses 8+ distinct content words.
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+    a_raw = "This distinctive sentence describes foxes rivers mountains valleys forests deserts."
+    b_raw = "This unrelated document explains quantum mechanics particles waves energy fields."
+    a_tokens, a_kgrams = pre.process(a_raw, language="text")
+    b_tokens, b_kgrams = pre.process(b_raw, language="text")
+    return {
+        "a.txt": {"raw": a_raw, "tokens": a_tokens, "kgrams": a_kgrams, "language": "text"},
+        "b.txt": {"raw": b_raw, "tokens": b_tokens, "kgrams": b_kgrams, "language": "text"},
+    }
+
+
+def test_web_matches_populated_and_scored():
+    file_data = _web_file_data()
+    a_query = "This distinctive sentence describes foxes rivers mountains valleys forests deserts."
+    web_client = _FakeWebClient(
+        {a_query: [("https://example.com/foxes", "Foxes", file_data["a.txt"]["raw"])]}
+    )
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+
+    result = ScanEngine(mode="text_similarity").compute(
+        file_data, preprocessor=pre, web_client=web_client, max_web_queries=5
+    )
+
+    assert result.web_matches["a.txt"]
+    assert result.web_matches["a.txt"][0].url == "https://example.com/foxes"
+    assert result.web_matches["a.txt"][0].score == pytest.approx(1.0)
+    assert result.web_matches["b.txt"] == []
+
+
+def test_web_matches_do_not_leak_between_files():
+    """File A's web results must not affect file B's similarity index or
+    source breakdown — each file gets its own per-file merge."""
+    file_data = _web_file_data()
+    a_query = "This distinctive sentence describes foxes rivers mountains valleys forests deserts."
+    web_client = _FakeWebClient(
+        {a_query: [("https://example.com/foxes", "Foxes", file_data["a.txt"]["raw"])]}
+    )
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+
+    result = ScanEngine(mode="text_similarity").compute(
+        file_data, preprocessor=pre, web_client=web_client, max_web_queries=5
+    )
+
+    b_sources = [s["source"] for s in result.source_breakdowns.get("b.txt", [])]
+    assert "https://example.com/foxes" not in b_sources
+
+
+def test_uploaded_matrix_unaffected_by_web_client():
+    """The uploaded-vs-uploaded matrix must be identical whether or not a
+    web_client is supplied — web pages never enter it."""
+    file_data = _web_file_data()
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+
+    without_web = ScanEngine(mode="text_similarity").compute(file_data, preprocessor=pre)
+    web_client = _FakeWebClient({})
+    with_web = ScanEngine(mode="text_similarity").compute(
+        file_data, preprocessor=pre, web_client=web_client
+    )
+
+    assert without_web.matrix is not None and with_web.matrix is not None
+    assert without_web.matrix.get(0, 1) == pytest.approx(with_web.matrix.get(0, 1))
+
+
+def test_web_search_error_degrades_to_empty_matches_not_raise():
+    file_data = _web_file_data()
+    a_query = "This distinctive sentence describes foxes rivers mountains valleys forests deserts."
+    web_client = _FakeWebClient({}, raise_search_for={a_query})
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+
+    result = ScanEngine(mode="text_similarity").compute(
+        file_data, preprocessor=pre, web_client=web_client, max_web_queries=5
+    )
+
+    assert result.web_matches["a.txt"] == []
+    assert any("Web search failed" in w for w in result.warnings)
+
+
+def test_web_client_without_preprocessor_is_a_noop_with_warning():
+    file_data = _web_file_data()
+    web_client = _FakeWebClient({})
+    result = ScanEngine(mode="text_similarity").compute(file_data, web_client=web_client)
+    assert result.web_matches == {}
+    assert any("without a preprocessor" in w for w in result.warnings)
+
+
+def test_web_client_ignored_for_ai_modes():
+    file_data = _web_file_data()
+    web_client = _FakeWebClient({})
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+    result = ScanEngine(mode="ai_text").compute(file_data, preprocessor=pre, web_client=web_client)
+    assert result.web_matches == {}
+
+
+def test_on_query_callback_invoked_per_query():
+    file_data = _web_file_data()
+    a_query = "This distinctive sentence describes foxes rivers mountains valleys forests deserts."
+    web_client = _FakeWebClient(
+        {a_query: [("https://example.com/foxes", "Foxes", file_data["a.txt"]["raw"])]}
+    )
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+    calls: list[tuple[str, int]] = []
+
+    ScanEngine(mode="text_similarity").compute(
+        file_data,
+        preprocessor=pre,
+        web_client=web_client,
+        max_web_queries=5,
+        on_query=lambda q, n: calls.append((q, n)),
+    )
+
+    assert (a_query, 1) in calls
+
+
+def test_web_budget_exceeded_skips_remaining_work():
+    file_data = _web_file_data()
+    web_client = _FakeWebClient({})
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+
+    result = ScanEngine(mode="text_similarity").compute(
+        file_data, preprocessor=pre, web_client=web_client, web_budget_seconds=-1
+    )
+
+    assert any("budget exceeded" in w for w in result.warnings)

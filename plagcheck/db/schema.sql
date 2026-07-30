@@ -1,11 +1,11 @@
--- Plagiarism Detection System | PostgreSQL Schema v2.0.0
+-- Plagiarism Detection System | PostgreSQL Schema v2.1.0
 -- Run: psql -U plagcheck_user plagcheck_db < db/schema.sql
 --
 -- Safe to re-run against an existing v1 database: every CREATE TABLE is
 -- IF NOT EXISTS, and the v2 additions (mode/language support, the AI-result
--- table, per-file similarity index) use named constraints that are dropped
--- and re-added idempotently below, so this file both creates a fresh schema
--- and upgrades an older one in place.
+-- table, per-file similarity index, internet-source matches) use named
+-- constraints that are dropped and re-added idempotently below, so this
+-- file both creates a fresh schema and upgrades an older one in place.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto; 
 
@@ -111,15 +111,40 @@ CREATE TABLE IF NOT EXISTS scan_ai_result (
 
 CREATE INDEX IF NOT EXISTS idx_ai_result_scan ON scan_ai_result (scan_id);
 
+-- One row per fetched web page compared against an uploaded file, for the
+-- code_similarity/text_similarity modes' "compare against the internet"
+-- feature (see websearch.py). Scoped strictly to files whose mode is
+-- web-eligible; empty for AI-mode scans and for any scan where web search
+-- was unavailable/disabled.
+CREATE TABLE IF NOT EXISTS scan_web_match (
+ web_match_id SERIAL PRIMARY KEY,
+ scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
+ file_id INTEGER NOT NULL REFERENCES scan_file(file_id) ON DELETE CASCADE,
+ query TEXT NOT NULL,
+ url TEXT NOT NULL,
+ title TEXT,
+ score FLOAT NOT NULL CHECK (score >= 0 AND score <= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_match_scan ON scan_web_match (scan_id);
+CREATE INDEX IF NOT EXISTS idx_web_match_file ON scan_web_match (file_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
  log_id SERIAL PRIMARY KEY,
  scan_id INTEGER REFERENCES scan_request(scan_id) ON DELETE SET NULL,
  user_id INTEGER REFERENCES app_user(user_id) ON DELETE SET NULL,
- event_type VARCHAR(50) NOT NULL
- CHECK (event_type IN ('SCAN_START','SCAN_COMPLETE','SCAN_ERROR','FILE_REJECTED','API_REQUEST','API_ERROR')),
+ event_type VARCHAR(50) NOT NULL,
  event_timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
- event_detail TEXT 
-); 
+ event_detail TEXT
+);
+
+ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_event_type_check;
+ALTER TABLE audit_log ADD CONSTRAINT audit_log_event_type_check CHECK (
+ event_type IN (
+   'SCAN_START','SCAN_COMPLETE','SCAN_ERROR','FILE_REJECTED',
+   'API_REQUEST','API_ERROR','WEB_SEARCH_QUERY'
+ )
+);
 
 CREATE INDEX IF NOT EXISTS idx_audit_scan ON audit_log (scan_id); 
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (event_timestamp DESC);
