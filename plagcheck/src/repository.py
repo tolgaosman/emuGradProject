@@ -1,22 +1,26 @@
 """ repository.py — ScanRepository: persists scans across the 3NF schema.
 
-Writes scan_request -> scan_file -> scan_algorithm -> scan_pair in one
-transaction. When PostgreSQL is unreachable, falls back to a JSON file per
-scan under `output/scans/`, mirroring the offline fallback pattern in
-`audit.py`. `get_scan` reads DB-first, then the JSON fallback, so a report
-stays retrievable across process restarts either way.
+Writes scan_request -> scan_file -> scan_algorithm -> scan_pair (similarity
+modes) or -> scan_ai_result (AI modes) in one transaction. When PostgreSQL is
+unreachable, falls back to a JSON file per scan under `output/scans/`,
+mirroring the offline fallback pattern in `audit.py`. `get_scan` reads
+DB-first, then the JSON fallback, so a report stays retrievable across
+process restarts either way.
 """
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
 
 import psycopg2
 
-from .matrix import ComparisonMatrix
+from .engine import ScanResult
 
 _SYSTEM_USER_EMAIL = "system@plagcheck.local"
 _JSON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "output", "scans"))
+
+logger = logging.getLogger(__name__)
 
 
 class ScanRepository:
@@ -47,20 +51,23 @@ class ScanRepository:
 
     def save_scan(
         self,
-        algorithm: str,
+        mode: str,
         threshold: float,
         files_meta: list[dict],
-        matrix: ComparisonMatrix,
+        result: ScanResult,
         scan_uuid: str | None = None,
     ) -> str:
         """Persist a completed scan and return its public scan_uuid.
 
         `files_meta` is `[{"file_name", "file_size_bytes", "file_format"}, ...]`
-        in the same order as `matrix.names`. Falls back to a JSON file under
-        `output/scans/` when PostgreSQL is unreachable.
+        in the same order as `result.names`. Falls back to a JSON file under
+        `output/scans/` when PostgreSQL is unreachable *or* when the DB
+        write itself fails (e.g. a constraint violation) — that failure is
+        logged loudly rather than swallowed, since a silent fallback would
+        otherwise look identical to a successful relational write.
         """
         scan_uuid = scan_uuid or str(uuid.uuid4())
-        record = self._build_record(scan_uuid, algorithm, threshold, files_meta, matrix)
+        record = self._build_record(scan_uuid, mode, threshold, files_meta, result)
 
         conn = self._get_connection()
         if conn:
@@ -69,6 +76,9 @@ class ScanRepository:
                 conn.commit()
                 return scan_uuid
             except Exception:
+                logger.exception(
+                    "DB write failed for scan %s (mode=%s) — falling back to JSON", scan_uuid, mode
+                )
                 conn.rollback()
             finally:
                 conn.close()
@@ -85,7 +95,7 @@ class ScanRepository:
                 if record is not None:
                     return record
             except Exception:
-                pass
+                logger.exception("DB read failed for scan %s — falling back to JSON", scan_uuid)
             finally:
                 conn.close()
         return self._load_json(scan_uuid)
@@ -95,22 +105,40 @@ class ScanRepository:
     def _build_record(
         self,
         scan_uuid: str,
-        algorithm: str,
+        mode: str,
         threshold: float,
         files_meta: list[dict],
-        matrix: ComparisonMatrix,
+        result: ScanResult,
     ) -> dict:
-        pairs = [
-            {**pair, "flagged": pair["score"] >= threshold} for pair in matrix.all_pairs()
-        ]
+        if result.is_ai:
+            pairs: list[dict] = []
+            files = list(files_meta)
+            ai_results = [
+                {"file": name, **result.ai_assessments[name].to_dict()}
+                for name in result.names
+                if name in result.ai_assessments
+            ]
+        else:
+            pairs = [
+                {**pair, "flagged": pair["score"] >= threshold}
+                for pair in (result.matrix.all_pairs() if result.matrix else [])
+            ]
+            files = [
+                {**f, "similarity_index": result.similarity_indices.get(f["file_name"])}
+                for f in files_meta
+            ]
+            ai_results = []
+
         return {
             "scan_uuid": scan_uuid,
-            "algorithm": algorithm,
+            "algorithm": mode,
             "threshold": threshold,
             "status": "complete",
             "timestamp": datetime.now().isoformat(),
-            "files": files_meta,
+            "files": files,
             "pairs": pairs,
+            "ai_scores": ai_results,
+            "source_breakdowns": result.source_breakdowns,
         }
 
     # -- PostgreSQL ------------------------------------------------------------
@@ -146,9 +174,16 @@ class ScanRepository:
             file_ids: dict[str, int] = {}
             for f in record["files"]:
                 cur.execute(
-                    "INSERT INTO scan_file (scan_id, file_name, file_size_bytes, file_format) "
-                    "VALUES (%s, %s, %s, %s) RETURNING file_id",
-                    (scan_id, f["file_name"], f["file_size_bytes"], f["file_format"]),
+                    "INSERT INTO scan_file "
+                    "(scan_id, file_name, file_size_bytes, file_format, similarity_index) "
+                    "VALUES (%s, %s, %s, %s, %s) RETURNING file_id",
+                    (
+                        scan_id,
+                        f["file_name"],
+                        f["file_size_bytes"],
+                        f["file_format"],
+                        f.get("similarity_index"),
+                    ),
                 )
                 file_ids[f["file_name"]] = cur.fetchone()[0]
 
@@ -161,6 +196,16 @@ class ScanRepository:
                     "(scan_id, file_id_a, file_id_b, similarity_score, flagged) "
                     "VALUES (%s, %s, %s, %s, %s)",
                     (scan_id, id_a, id_b, pair["score"], pair["flagged"]),
+                )
+
+            for ai_result in record["ai_scores"]:
+                file_id = file_ids.get(ai_result["file"])
+                if file_id is None:
+                    continue
+                cur.execute(
+                    "INSERT INTO scan_ai_result (scan_id, file_id, probability, band) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (scan_id, file_id, ai_result["overall_probability"], ai_result["band"]),
                 )
 
     def _load_db(self, conn, scan_uuid: str) -> dict | None:
@@ -179,16 +224,21 @@ class ScanRepository:
                 "SELECT algorithm_name FROM scan_algorithm WHERE scan_id = %s LIMIT 1", (scan_id,)
             )
             algo_row = cur.fetchone()
-            algorithm = algo_row[0] if algo_row else "cosine"
+            algorithm = algo_row[0] if algo_row else "text_similarity"
 
             cur.execute(
-                "SELECT file_id, file_name, file_size_bytes, file_format FROM scan_file "
-                "WHERE scan_id = %s",
+                "SELECT file_id, file_name, file_size_bytes, file_format, similarity_index "
+                "FROM scan_file WHERE scan_id = %s",
                 (scan_id,),
             )
             files = {
-                fid: {"file_name": name, "file_size_bytes": size, "file_format": fmt}
-                for fid, name, size, fmt in cur.fetchall()
+                fid: {
+                    "file_name": name,
+                    "file_size_bytes": size,
+                    "file_format": fmt,
+                    "similarity_index": float(index) if index is not None else None,
+                }
+                for fid, name, size, fmt, index in cur.fetchall()
             }
 
             cur.execute(
@@ -206,6 +256,20 @@ class ScanRepository:
                 for id_a, id_b, score, flagged in cur.fetchall()
             ]
 
+            cur.execute(
+                "SELECT file_id, probability, band FROM scan_ai_result WHERE scan_id = %s",
+                (scan_id,),
+            )
+            ai_scores = [
+                {
+                    "file": files[file_id]["file_name"],
+                    "overall_probability": float(prob),
+                    "band": band,
+                }
+                for file_id, prob, band in cur.fetchall()
+                if file_id in files
+            ]
+
         return {
             "scan_uuid": scan_uuid,
             "algorithm": algorithm,
@@ -214,6 +278,11 @@ class ScanRepository:
             "timestamp": timestamp.isoformat(),
             "files": list(files.values()),
             "pairs": pairs,
+            "ai_scores": ai_scores,
+            # Ranked per-source contributions aren't persisted relationally
+            # (see the docstring on scan_ai_result) — only available for
+            # scans that are still in the JSON fallback / same-process cache.
+            "source_breakdowns": {},
         }
 
     # -- JSON fallback -----------------------------------------------------

@@ -1,11 +1,13 @@
 """ plagcheck.py — CLI entry point. """
 import argparse
+import json
 import os
 import uuid
 
 from dotenv import load_dotenv
 from src.audit import AuditLogger
-from src.engine import AlgorithmEngine
+from src.engine import ScanEngine
+from src.language import MODES, language_for_extension
 from src.loader import MAX_FILES, FileLoader
 from src.preprocessor import Preprocessor
 from src.reporter import ReportGenerator
@@ -13,22 +15,52 @@ from src.repository import ScanRepository
 
 load_dotenv()
 
+#: `--algorithm` is a legacy alias, documented in the graduation report
+#: alongside `--mode`. It maps onto the mode whose composition includes that
+#: algorithm most directly (AST only makes sense for code; the rest default
+#: to text) — see `engine.py`'s `_CODE_*_WEIGHT` / `_TEXT_*_WEIGHT` for what
+#: each mode actually composes.
+_ALGORITHM_TO_MODE = {
+    "ast": "code_similarity",
+    "winnowing": "text_similarity",
+    "cosine": "text_similarity",
+    "jaccard": "text_similarity",
+    "all": "text_similarity",
+}
+
+
+def _resolve_mode(args) -> str:
+    """Resolve the effective mode from --mode / --algorithm / the env default."""
+    if args.mode:
+        return args.mode
+    if args.algorithm:
+        mode = _ALGORITHM_TO_MODE[args.algorithm]
+        print(f"Note: --algorithm is a legacy alias; '{args.algorithm}' maps to mode '{mode}'.")
+        return mode
+    return os.environ.get("DEFAULT_MODE", "text_similarity")
+
 
 def main():
     """Parse CLI args, run a scan over --files, and write report artifacts."""
-    parser = argparse.ArgumentParser(description="Plagiarism and File Similarity Detection System")
+    parser = argparse.ArgumentParser(description="Plagiarism, Similarity, and AI-Content Detection")
     parser.add_argument("--files", nargs="+", required=True, help="List of file paths to scan")
     parser.add_argument(
+        "--mode",
+        choices=sorted(MODES),
+        default=None,
+        help="Scanning mode (default: text_similarity, or DEFAULT_MODE env var)",
+    )
+    parser.add_argument(
         "--algorithm",
-        choices=["cosine", "winnowing", "jaccard", "ast", "all"],
-        default=os.environ.get("DEFAULT_ALGORITHM", "cosine"),
-        help="Similarity algorithm to use",
+        choices=sorted(_ALGORITHM_TO_MODE),
+        default=None,
+        help="Legacy alias for --mode (see docs); ignored if --mode is also given",
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=float(os.environ.get("DEFAULT_THRESHOLD", "0.70")),
-        help="Similarity threshold (0.01 - 0.99)",
+        help="Similarity threshold (0.01 - 0.99); unused in ai_code/ai_text modes",
     )
     parser.add_argument(
         "--output", type=str, default="output", help="Output directory for reports"
@@ -44,6 +76,9 @@ def main():
     )
 
     args = parser.parse_args()
+    mode = _resolve_mode(args)
+    is_ai = mode in ("ai_code", "ai_text")
+    min_files = 1 if is_ai else 2
 
     if not (0.01 <= args.threshold <= 0.99):
         print("Error: Threshold must be between 0.01 and 0.99")
@@ -55,18 +90,14 @@ def main():
 
     scan_uuid = str(uuid.uuid4())
     audit = AuditLogger()
-    audit.log(
-        "SCAN_START",
-        scan_uuid=scan_uuid,
-        payload={"files": args.files, "algorithm": args.algorithm},
-    )
+    audit.log("SCAN_START", scan_uuid=scan_uuid, payload={"files": args.files, "mode": mode})
 
     loader = FileLoader()
     preprocessor = Preprocessor(exclusions_path=args.exclusions)
     file_data = {}
     files_meta = []
 
-    print(f"Loading {len(args.files)} files...")
+    print(f"Loading {len(args.files)} files for mode '{mode}'...")
     for raw_path in args.files:
         # Resolve to an absolute path first. The loader rejects '..' as a path
         # component to stop traversal from untrusted API input, but a CLI
@@ -74,60 +105,88 @@ def main():
         # and they already have shell-level filesystem access anyway.
         path = os.path.abspath(raw_path)
         try:
-            raw_text = loader.load(path)
-            is_python = path.lower().endswith(".py")
-            tokens, kgrams = preprocessor.process(raw_text, is_python=is_python)
+            raw_text = loader.load(path, mode=mode)
+            ext = os.path.splitext(path)[1].lower()
+            language = language_for_extension(ext) or "text"
+            tokens, kgrams = preprocessor.process(raw_text, language=language)
             name = os.path.basename(path)
             file_data[name] = {
                 "raw": raw_text,
                 "tokens": tokens,
                 "kgrams": kgrams,
-                "is_python": is_python,
+                "language": language,
             }
             files_meta.append({
                 "file_name": name,
                 "file_size_bytes": os.path.getsize(path),
-                "file_format": os.path.splitext(path)[1].lstrip(".").lower(),
+                "file_format": ext.lstrip(".").lower(),
             })
         except Exception as e:
             print(f"Skipping {path}: {e}")
             audit.log("FILE_REJECTED", scan_uuid=scan_uuid, payload={"file": path, "error": str(e)})
 
-    if len(file_data) < 2:
-        print("Error: Need at least 2 valid files to compare.")
+    if len(file_data) < min_files:
+        print(f"Error: Need at least {min_files} valid file(s) for mode '{mode}'.")
         return
 
-    print(f"Computing similarities using '{args.algorithm}'...")
-    engine = AlgorithmEngine(algorithm=args.algorithm)
-    matrix = engine.compute(file_data)
+    print(f"Running '{mode}'...")
+    engine = ScanEngine(mode=mode)
+    result = engine.compute(file_data, preprocessor=preprocessor)
 
-    ScanRepository().save_scan(args.algorithm, args.threshold, files_meta, matrix, scan_uuid)
+    ScanRepository().save_scan(mode, args.threshold, files_meta, result, scan_uuid)
 
-    reporter = ReportGenerator()
-    artifacts = reporter.generate(
-        matrix,
-        args.output,
-        threshold=args.threshold,
-        file_data=file_data,
-        preprocessor=preprocessor,
-    )
+    os.makedirs(args.output, exist_ok=True)
 
-    print(f"\nScan complete. Flagged pairs (>= {args.threshold}):")
-    flagged = matrix.get_flagged(args.threshold)
-    if not flagged:
-        print("  None")
+    if is_ai:
+        _report_ai(result, args.output)
+        flagged_count = sum(1 for a in result.ai_assessments.values() if a.band != "low")
     else:
-        for f in flagged:
-            print(f"  {f['file_a']} <-> {f['file_b']} : {f['score']:.4f}")
+        assert result.matrix is not None  # guaranteed for non-AI modes by ScanEngine.compute
+        reporter = ReportGenerator()
+        artifacts = reporter.generate(
+            result.matrix,
+            args.output,
+            threshold=args.threshold,
+            file_data=file_data,
+            preprocessor=preprocessor,
+        )
+        flagged = result.matrix.get_flagged(args.threshold)
+        flagged_count = len(flagged)
 
-    print(f"\nArtifacts generated in '{args.output}':")
-    if args.format in ["csv", "both"]:
-        print(f"  - {artifacts['csv']}")
-    if args.format in ["html", "both"]:
-        print(f"  - {artifacts['html']}")
-    print(f"  - {artifacts['heatmap']}")
+        print(f"\nScan complete. Flagged pairs (>= {args.threshold}):")
+        if not flagged:
+            print("  None")
+        else:
+            for f in flagged:
+                print(f"  {f['file_a']} <-> {f['file_b']} : {f['score']:.4f}")
 
-    audit.log("SCAN_COMPLETE", scan_uuid=scan_uuid, payload={"flagged_count": len(flagged)})
+        print(f"\nArtifacts generated in '{args.output}':")
+        if args.format in ["csv", "both"]:
+            print(f"  - {artifacts['csv']}")
+        if args.format in ["html", "both"]:
+            print(f"  - {artifacts['html']}")
+        print(f"  - {artifacts['heatmap']}")
+
+    audit.log("SCAN_COMPLETE", scan_uuid=scan_uuid, payload={"flagged_count": flagged_count})
+
+
+def _report_ai(result, output_dir: str) -> None:
+    """Print each file's AI assessment and write ai_report.json.
+
+    AI modes have no pairwise matrix, so the CSV/HTML/heatmap artifacts
+    don't apply — this is the AI-mode equivalent of `ReportGenerator`.
+    """
+    print("\nAI detection results - indicative only, not evidence of misconduct:")
+    report = {}
+    for name in result.names:
+        assessment = result.ai_assessments[name]
+        print(f"  {name}: {assessment.overall_probability:.4f} ({assessment.band})")
+        report[name] = assessment.to_dict()
+
+    path = os.path.join(output_dir, "ai_report.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    print(f"\nArtifacts generated in '{output_dir}':\n  - {path}")
 
 
 if __name__ == "__main__":

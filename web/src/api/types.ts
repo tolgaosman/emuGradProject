@@ -1,4 +1,6 @@
-export type Algorithm = 'cosine' | 'winnowing' | 'jaccard' | 'ast' | 'all'
+export type Mode = 'code_similarity' | 'text_similarity' | 'ai_code' | 'ai_text'
+export type Language = 'text' | 'python' | 'java' | 'c' | 'cpp'
+export type AIBand = 'low' | 'possible' | 'likely'
 
 export interface SimilarityPair {
   file_a: string
@@ -17,12 +19,42 @@ export interface FileError {
   error: string
 }
 
+export interface AISignal {
+  name: string
+  score: number
+  weight: number
+}
+
+export interface AISegment {
+  start: number
+  end: number
+  probability: number
+}
+
+export interface AIScore {
+  file: string
+  overall_probability: number
+  band: AIBand
+  signals: AISignal[]
+  segments: AISegment[]
+}
+
+export interface SourceContribution {
+  source: string
+  contribution: number
+  spans: [number, number][]
+}
+
 export interface CheckResponse {
   scan_id: string
-  algorithm: Algorithm
+  mode: Mode
   threshold: number
-  matrix: ScanMatrix
+  min_match_words: number
+  matrix: ScanMatrix | null
   pairs: SimilarityPair[]
+  similarity_indices: Record<string, number>
+  source_breakdowns: Record<string, SourceContribution[]>
+  ai_scores: AIScore[]
   errors: FileError[]
 }
 
@@ -50,16 +82,19 @@ export interface ScanFileMeta {
   file_name: string
   file_size_bytes: number
   file_format: string
+  similarity_index?: number | null
 }
 
 export interface ReportResponse {
   scan_uuid: string
-  algorithm: Algorithm
+  algorithm: Mode
   threshold: number
   status: string
   timestamp: string
   files: ScanFileMeta[]
   pairs: SimilarityPair[]
+  ai_scores: AIScore[]
+  source_breakdowns: Record<string, SourceContribution[]>
 }
 
 export interface PairSide {
@@ -71,4 +106,9 @@ export interface PairSide {
 export interface PairResponse {
   file_a: PairSide
   file_b: PairSide
+}
+
+export interface DetectLanguageResponse {
+  language: Language
+  confidence: number
 }

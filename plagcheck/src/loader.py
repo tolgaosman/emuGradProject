@@ -7,7 +7,9 @@ import fitz
 import pdfplumber
 from docx import Document as DocxDocument
 
-SUPPORTED = {".txt", ".py", ".pdf", ".docx"}
+from .language import is_allowed_for_mode
+
+SUPPORTED = {".txt", ".py", ".pdf", ".docx", ".java", ".c", ".h", ".cpp", ".cc", ".hpp"}
 MAX_BYTES = 10 * 1024 * 1024
 MAX_FILES = 50
 SAFE_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
@@ -20,9 +22,15 @@ class FileLoadError(Exception):
 class FileLoader:
     """Validates and extracts text from an uploaded/on-disk file."""
 
-    def load(self, path: str) -> str:
-        """Validate `path` and return its extracted text."""
-        self._validate(path)
+    def load(self, path: str, mode: str | None = None) -> str:
+        """Validate `path` and return its extracted text.
+
+        When `mode` is given, the extension must also be on that mode's
+        allow-list (see `language.MODE_EXTENSIONS`) — e.g. a `.py` file is
+        rejected in `text_similarity` even though `.py` is a generally
+        supported extension.
+        """
+        self._validate(path, mode)
         ext = os.path.splitext(path)[1].lower()
         if ext == ".pdf":
             return self._load_pdf(path)
@@ -30,7 +38,7 @@ class FileLoader:
             return self._load_docx(path)
         return self._load_text(path)
 
-    def load_batch(self, paths: list[str]) -> dict[str, str]:
+    def load_batch(self, paths: list[str], mode: str | None = None) -> dict[str, str]:
         """Load every path in `paths`, enforcing the batch size limit.
 
         Returns a mapping of basename -> extracted text for files that load
@@ -39,9 +47,9 @@ class FileLoader:
         """
         if len(paths) > MAX_FILES:
             raise FileLoadError(f"Batch of {len(paths)} exceeds max of {MAX_FILES} files.")
-        return {os.path.basename(p): self.load(p) for p in paths}
+        return {os.path.basename(p): self.load(p, mode) for p in paths}
 
-    def _validate(self, path):
+    def _validate(self, path, mode: str | None = None):
         name = os.path.basename(path)
         if not SAFE_RE.match(name):
             raise FileLoadError(f"Unsafe filename: {name}")
@@ -51,8 +59,11 @@ class FileLoader:
         parts = re.split(r"[\\/]", path)
         if ".." in parts:
             raise FileLoadError(f"Path traversal: {path}")
-        if os.path.splitext(path)[1].lower() not in SUPPORTED:
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in SUPPORTED:
             raise FileLoadError(f"Unsupported format: {path}")
+        if mode is not None and not is_allowed_for_mode(ext, mode):
+            raise FileLoadError(f"Format {ext} is not accepted by mode '{mode}': {path}")
         if os.path.islink(path):
             raise FileLoadError(f"Symlinks are not allowed: {path}")
         try:

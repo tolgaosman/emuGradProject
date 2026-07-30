@@ -28,26 +28,26 @@ def test_status_ok(client):
     assert resp.get_json()["status"] == "ok"
 
 
-def test_algorithms_lists_all_five(client):
-    resp = client.get("/api/algorithms")
+def test_modes_lists_all_four(client):
+    resp = client.get("/api/modes")
     assert resp.status_code == 200
-    assert resp.get_json()["algorithms"] == ["all", "ast", "cosine", "jaccard", "winnowing"]
+    assert resp.get_json()["modes"] == ["ai_code", "ai_text", "code_similarity", "text_similarity"]
 
 
 def test_check_happy_path(client):
     data = {
-        "algorithm": "jaccard",
+        "mode": "text_similarity",
         "threshold": "0.1",
         "files": [
-            _upload("a.txt", "the quick brown fox jumps over the lazy dog"),
-            _upload("b.txt", "the quick brown fox jumps over the lazy dog"),
+            _upload("a.txt", "the quick brown fox jumps over the lazy dog " * 20),
+            _upload("b.txt", "the quick brown fox jumps over the lazy dog " * 20),
         ],
     }
     resp = client.post("/api/check", data=data, content_type="multipart/form-data")
     body = resp.get_json()
 
     assert resp.status_code == 200
-    assert body["algorithm"] == "jaccard"
+    assert body["mode"] == "text_similarity"
     assert len(body["pairs"]) == 1
     assert body["pairs"][0]["score"] == pytest.approx(1.0)
     assert body["matrix"]["names"] == ["a.txt", "b.txt"]
@@ -60,14 +60,14 @@ def test_check_no_files_rejected(client):
     assert resp.get_json()["code"] == "no_files"
 
 
-def test_check_invalid_algorithm_rejected(client):
+def test_check_invalid_mode_rejected(client):
     data = {
-        "algorithm": "bogus",
+        "mode": "bogus",
         "files": [_upload("a.txt", "hello"), _upload("b.txt", "world")],
     }
     resp = client.post("/api/check", data=data, content_type="multipart/form-data")
     assert resp.status_code == 400
-    assert resp.get_json()["code"] == "invalid_algorithm"
+    assert resp.get_json()["code"] == "invalid_mode"
 
 
 def test_check_non_numeric_threshold_rejected(client):
@@ -109,9 +109,12 @@ def test_check_insufficient_valid_files_rejected(client):
 
 def test_report_roundtrip(client):
     data = {
-        "algorithm": "jaccard",
+        "mode": "text_similarity",
         "threshold": "0.1",
-        "files": [_upload("a.txt", "alpha beta gamma"), _upload("b.txt", "alpha beta gamma")],
+        "files": [
+            _upload("a.txt", "alpha beta gamma " * 20),
+            _upload("b.txt", "alpha beta gamma " * 20),
+        ],
     }
     check_resp = client.post("/api/check", data=data, content_type="multipart/form-data")
     scan_id = check_resp.get_json()["scan_id"]
@@ -131,11 +134,11 @@ def test_report_not_found(client):
 
 def test_report_pair_returns_matched_spans(client):
     data = {
-        "algorithm": "jaccard",
+        "mode": "text_similarity",
         "threshold": "0.1",
         "files": [
-            _upload("a.txt", "the quick brown fox jumps over the lazy dog"),
-            _upload("b.txt", "the quick brown fox jumps over the lazy dog"),
+            _upload("a.txt", "the quick brown fox jumps over the lazy dog " * 20),
+            _upload("b.txt", "the quick brown fox jumps over the lazy dog " * 20),
         ],
     }
     check_resp = client.post("/api/check", data=data, content_type="multipart/form-data")
@@ -155,9 +158,12 @@ def test_report_pair_not_found(client):
 
 def test_report_heatmap_streams_png(client):
     data = {
-        "algorithm": "jaccard",
+        "mode": "text_similarity",
         "threshold": "0.1",
-        "files": [_upload("a.txt", "alpha beta gamma"), _upload("b.txt", "alpha beta gamma")],
+        "files": [
+            _upload("a.txt", "alpha beta gamma " * 20),
+            _upload("b.txt", "alpha beta gamma " * 20),
+        ],
     }
     check_resp = client.post("/api/check", data=data, content_type="multipart/form-data")
     scan_id = check_resp.get_json()["scan_id"]
@@ -171,3 +177,103 @@ def test_report_heatmap_streams_png(client):
 def test_report_heatmap_not_found(client):
     resp = client.get("/api/report/00000000-0000-0000-0000-000000000000/heatmap.png")
     assert resp.status_code == 404
+
+
+def test_check_rejects_wrong_extension_for_mode(client):
+    """A .py file is rejected by text_similarity even though .py is a
+    generally supported extension — it's not on that mode's allow-list."""
+    data = {
+        "mode": "text_similarity",
+        "files": [_upload("a.py", "print(1)"), _upload("b.txt", "hello world")],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 400
+    assert any(".py" in e["error"] for e in body["file_errors"])
+
+
+def test_check_rejects_wrong_extension_for_code_mode(client):
+    data = {
+        "mode": "code_similarity",
+        "files": [_upload("a.docx", "hello"), _upload("b.py", "print(1)")],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 400
+    assert any(".docx" in e["error"] for e in body["file_errors"])
+
+
+def test_check_ai_text_mode_accepts_single_file(client):
+    """AI modes only need 1 file, unlike the 2-file minimum for similarity modes."""
+    data = {"mode": "ai_text", "files": [_upload("a.txt", "A short passage of ordinary prose.")]}
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["matrix"] is None
+    assert len(body["ai_scores"]) == 1
+    assert body["ai_scores"][0]["file"] == "a.txt"
+    assert body["ai_scores"][0]["band"] in ("low", "possible", "likely")
+    assert "signals" in body["ai_scores"][0]
+    assert "segments" in body["ai_scores"][0]
+
+
+def test_check_ai_code_mode_java(client):
+    java = (
+        "public class Main {\n"
+        "    public static void main(String[] args) {\n"
+        "        System.out.println(1);\n"
+        "    }\n"
+        "}\n"
+    )
+    data = {"mode": "ai_code", "files": [_upload("Main.java", java)]}
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["ai_scores"][0]["file"] == "Main.java"
+
+
+def test_heatmap_not_available_for_ai_scan(client):
+    data = {"mode": "ai_text", "files": [_upload("a.txt", "Some plain text content here.")]}
+    check_resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    scan_id = check_resp.get_json()["scan_id"]
+
+    resp = client.get(f"/api/report/{scan_id}/heatmap.png")
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "not_applicable"
+
+
+def test_detect_language_java(client):
+    java = "public class Main { public static void main(String[] a) { System.out.println(1); } }"
+    resp = client.post("/api/detect-language", json={"text": java})
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["language"] == "java"
+    assert 0.0 <= body["confidence"] <= 1.0
+
+
+def test_detect_language_rejects_empty(client):
+    resp = client.post("/api/detect-language", json={"text": "   "})
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "empty_text"
+
+
+def test_detect_language_rejects_too_long(client):
+    resp = client.post("/api/detect-language", json={"text": "x" * 15_001})
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "text_too_long"
+
+
+def test_check_similarity_index_in_response(client):
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [
+            _upload("a.txt", "the quick brown fox jumps over the lazy dog near the water " * 3),
+            _upload("b.txt", "the quick brown fox jumps over the lazy dog near the water " * 3),
+        ],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["similarity_indices"]["a.txt"] > 0.0
+    assert body["source_breakdowns"]["a.txt"][0]["source"] == "b.txt"

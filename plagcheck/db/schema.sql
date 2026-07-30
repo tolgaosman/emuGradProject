@@ -1,5 +1,11 @@
--- Plagiarism Detection System | PostgreSQL Schema v1.0.0 
--- Run: psql -U plagcheck_user plagcheck_db < db/schema.sql 
+-- Plagiarism Detection System | PostgreSQL Schema v2.0.0
+-- Run: psql -U plagcheck_user plagcheck_db < db/schema.sql
+--
+-- Safe to re-run against an existing v1 database: every CREATE TABLE is
+-- IF NOT EXISTS, and the v2 additions (mode/language support, the AI-result
+-- table, per-file similarity index) use named constraints that are dropped
+-- and re-added idempotently below, so this file both creates a fresh schema
+-- and upgrades an older one in place.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto; 
 
@@ -39,8 +45,22 @@ CREATE TABLE IF NOT EXISTS scan_file (
  scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
  file_name VARCHAR(255) NOT NULL,
  file_size_bytes BIGINT NOT NULL CHECK (file_size_bytes > 0),
- file_format VARCHAR(10) NOT NULL CHECK (file_format IN ('txt','py','pdf','docx'))
-); 
+ file_format VARCHAR(10) NOT NULL,
+ -- Turnitin-style per-document "% of this file matched something else" in
+ -- the batch. Asymmetric (unlike scan_pair.similarity_score), so it lives
+ -- on the file, not the pair. NULL for AI-mode scans, where it doesn't apply.
+ similarity_index FLOAT
+);
+
+ALTER TABLE scan_file DROP CONSTRAINT IF EXISTS chk_file_format;
+ALTER TABLE scan_file ADD CONSTRAINT chk_file_format CHECK (
+ file_format IN ('txt','py','pdf','docx','java','c','h','cpp','cc','hpp')
+);
+
+ALTER TABLE scan_file DROP CONSTRAINT IF EXISTS chk_similarity_index_range;
+ALTER TABLE scan_file ADD CONSTRAINT chk_similarity_index_range CHECK (
+ similarity_index IS NULL OR (similarity_index >= 0 AND similarity_index <= 1)
+);
 
 CREATE INDEX IF NOT EXISTS idx_file_scan ON scan_file (scan_id);
 
@@ -59,9 +79,37 @@ CREATE INDEX IF NOT EXISTS idx_pair_flagged ON scan_pair (flagged) WHERE flagged
 
 CREATE TABLE IF NOT EXISTS scan_algorithm (
  scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
- algorithm_name VARCHAR(50) NOT NULL CHECK (algorithm_name IN ('cosine','winnowing','jaccard','ast','all')),
+ -- Historically named for the 4 selectable algorithms; now also stores the
+ -- 4 user-facing modes, each of which composes 1-2 of those algorithms
+ -- internally (see engine.py's _CODE_*_WEIGHT / _TEXT_*_WEIGHT constants).
+ -- Both vocabularies are kept so pre-v2 scan history stays valid.
+ algorithm_name VARCHAR(50) NOT NULL,
  PRIMARY KEY (scan_id, algorithm_name)
-); 
+);
+
+ALTER TABLE scan_algorithm DROP CONSTRAINT IF EXISTS chk_algorithm_name;
+ALTER TABLE scan_algorithm ADD CONSTRAINT chk_algorithm_name CHECK (
+ algorithm_name IN (
+   'cosine','winnowing','jaccard','ast','all',
+   'code_similarity','text_similarity','ai_code','ai_text'
+ )
+);
+
+-- One row per file per AI-mode scan (ai_code / ai_text). Only the headline
+-- probability + band are persisted relationally; the per-signal breakdown
+-- and sentence/block-level segments are richer analysis data that, like raw
+-- file text, live in the JSON sidecar / API response rather than the
+-- normalized schema.
+CREATE TABLE IF NOT EXISTS scan_ai_result (
+ result_id SERIAL PRIMARY KEY,
+ scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
+ file_id INTEGER NOT NULL REFERENCES scan_file(file_id) ON DELETE CASCADE,
+ probability FLOAT NOT NULL CHECK (probability >= 0 AND probability <= 1),
+ band VARCHAR(10) NOT NULL CHECK (band IN ('low','possible','likely')),
+ UNIQUE (scan_id, file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_result_scan ON scan_ai_result (scan_id);
 
 CREATE TABLE IF NOT EXISTS audit_log (
  log_id SERIAL PRIMARY KEY,

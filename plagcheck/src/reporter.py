@@ -14,9 +14,17 @@ import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 
+from .language import CODE_LANGUAGES  # noqa: E402
 from .matrix import ComparisonMatrix  # noqa: E402
 
 _PY_KEEP_TYPES = {py_tokenize.NAME, py_tokenize.NUMBER, py_tokenize.STRING}
+#: Identifiers/keywords and numeric literals for the non-Python code
+#: languages, matched directly against the original source (not
+#: comment/string-stripped) so highlighted spans keep exact character
+#: offsets — a token matched inside a comment is a rare cosmetic
+#: imprecision here, not a scoring error (model scoring uses the
+#: comment-aware tokenizer in preprocessor.py instead).
+_CODE_WORD_RE = re.compile(r"[A-Za-z_]\w*|\d+\.\d+|\d+")
 _KGRAM_K = 5
 
 
@@ -33,7 +41,7 @@ class ReportGenerator:
     ) -> dict[str, str]:
         """Write similarity_matrix.csv, similarity_heatmap.png, and the HTML report.
 
-        `file_data` (the same `{name: {"raw", "is_python", ...}}` mapping the
+        `file_data` (the same `{name: {"raw", "language", ...}}` mapping the
         engine consumed) and `preprocessor` are optional; when both are
         supplied, the HTML report renders side-by-side panes with matched
         5-gram spans highlighted for each flagged pair. Without them it falls
@@ -136,13 +144,27 @@ def _python_word_spans(text: str) -> list[tuple[str, int, int]] | None:
     return spans
 
 
-def _spanned_tokens(text: str, is_python: bool, preprocessor) -> list[tuple[str, int, int]]:
+def _code_word_spans(text: str) -> list[tuple[str, int, int]]:
+    """Return (word, start, end) for identifier/number tokens in non-Python code.
+
+    Matched against the original text (see `_CODE_WORD_RE`).
+    """
+    return [(m.group(), m.start(), m.end()) for m in _CODE_WORD_RE.finditer(text)]
+
+
+def _spanned_tokens(text: str, language: str, preprocessor) -> list[tuple[str, int, int]]:
     """Return (stemmed_token, start, end) for every surviving token.
 
     Only tokens that would pass the NLP pipeline's stopword filter are
     kept; each retains its original character span in `text`.
     """
-    word_spans = _python_word_spans(text) if is_python else None
+    if language == "python":
+        word_spans = _python_word_spans(text)
+    elif language in CODE_LANGUAGES:
+        word_spans = _code_word_spans(text)
+    else:
+        word_spans = None
+
     if word_spans is None:
         word_spans = [(m.group(), m.start(), m.end()) for m in re.finditer(r"\w+", text)]
 
@@ -172,14 +194,14 @@ def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
 def matched_spans(
     text_a: str,
     text_b: str,
-    is_python_a: bool,
-    is_python_b: bool,
+    language_a: str,
+    language_b: str,
     preprocessor,
     k: int = _KGRAM_K,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     """Find character ranges in `text_a`/`text_b` covered by shared k-grams."""
-    tokens_a = _spanned_tokens(text_a, is_python_a, preprocessor)
-    tokens_b = _spanned_tokens(text_b, is_python_b, preprocessor)
+    tokens_a = _spanned_tokens(text_a, language_a, preprocessor)
+    tokens_b = _spanned_tokens(text_b, language_b, preprocessor)
 
     def kgram_spans(tokens):
         return [
@@ -255,7 +277,7 @@ def _render_pairs(flagged: list[dict], file_data: dict, preprocessor) -> str:
         if data_a is None or data_b is None:
             continue
         spans_a, spans_b = matched_spans(
-            data_a["raw"], data_b["raw"], data_a["is_python"], data_b["is_python"], preprocessor
+            data_a["raw"], data_b["raw"], data_a["language"], data_b["language"], preprocessor
         )
         cards.append(
             _PAIR_TEMPLATE.format(

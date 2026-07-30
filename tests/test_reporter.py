@@ -47,10 +47,10 @@ def test_generate_side_by_side_highlights_prose_and_python(tmp_path):
     code_b = "def add(a, b):\n    result = a + b\n    return result\n"
 
     file_data = {
-        "a.txt": {"raw": prose_a, "tokens": [], "kgrams": [], "is_python": False},
-        "b.txt": {"raw": prose_b, "tokens": [], "kgrams": [], "is_python": False},
-        "a.py": {"raw": code_a, "tokens": [], "kgrams": [], "is_python": True},
-        "b.py": {"raw": code_b, "tokens": [], "kgrams": [], "is_python": True},
+        "a.txt": {"raw": prose_a, "tokens": [], "kgrams": [], "language": "text"},
+        "b.txt": {"raw": prose_b, "tokens": [], "kgrams": [], "language": "text"},
+        "a.py": {"raw": code_a, "tokens": [], "kgrams": [], "language": "python"},
+        "b.py": {"raw": code_b, "tokens": [], "kgrams": [], "language": "python"},
     }
     m = ComparisonMatrix(["a.txt", "b.txt", "a.py", "b.py"])
     m.set(0, 1, 0.85)
@@ -80,7 +80,7 @@ def test_matched_spans_falls_back_to_prose_for_unparseable_python():
     broken = "def broken(:\n    return\n"
     ok = "def broken(x):\n    return x\n"
 
-    spans_a, spans_b = matched_spans(broken, ok, True, True, pre)
+    spans_a, spans_b = matched_spans(broken, ok, "python", "python", pre)
     assert isinstance(spans_a, list)
     assert isinstance(spans_b, list)
 
@@ -91,8 +91,8 @@ def test_matched_spans_no_overlap_returns_empty_lists():
     spans_a, spans_b = matched_spans(
         "alpha beta gamma delta epsilon zeta",
         "unrelated words entirely different",
-        False,
-        False,
+        "text",
+        "text",
         pre,
     )
     assert spans_a == []

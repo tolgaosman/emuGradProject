@@ -9,11 +9,20 @@ from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 
+from .language import strip_comments_and_strings
+
 # Token types worth keeping when tokenizing Python source: identifiers,
 # keywords, and literals. Comments, whitespace, and punctuation carry no
 # similarity signal and are dropped, mirroring the prose pipeline's
 # punctuation-stripping step.
 _PY_KEEP_TYPES = {py_tokenize.NAME, py_tokenize.NUMBER, py_tokenize.STRING}
+
+#: Non-Python code languages handled by the generic regex tokenizer.
+_GENERIC_CODE_LANGUAGES = {"java", "c", "cpp"}
+
+#: Identifiers/keywords and numeric literals, applied after comments and
+#: string literals have been stripped via `language.strip_comments_and_strings`.
+_CODE_TOKEN_RE = re.compile(r"[A-Za-z_]\w*|\d+\.\d+|\d+")
 
 # Default location of the academic exclusion list. The CLI is launched from
 # inside plagcheck/, so config/ lives one directory above the package root:
@@ -71,17 +80,26 @@ class Preprocessor:
                     terms.add(self.stemmer.stem(token))
         return terms
 
-    def process(self, text: str, is_python: bool = False) -> tuple[list[str], list[str]]:
+    def process(self, text: str, language: str = "text") -> tuple[list[str], list[str]]:
         """Run the NLP pipeline over `text`, returning (tokens, k-grams).
 
-        Prose text is lowercased, stripped of punctuation, and word-tokenized
-        via NLTK. Python source (`is_python=True`) is instead tokenized with
-        the standard-library `tokenize` module so identifiers/keywords/
-        literals are preserved and code punctuation isn't mistaken for prose
-        noise; it falls back to the prose path if the source fails to
-        tokenize (e.g. a syntax error).
+        Prose text (`language="text"`) is lowercased, stripped of
+        punctuation, and word-tokenized via NLTK. Python source
+        (`language="python"`) is instead tokenized with the standard-library
+        `tokenize` module so identifiers/keywords/literals are preserved and
+        code punctuation isn't mistaken for prose noise; it falls back to
+        the prose path if the source fails to tokenize (e.g. a syntax
+        error). Java/C/C++ (`language in {"java","c","cpp"}`) use a generic
+        regex tokenizer that strips comments/string literals first, since
+        Python's `tokenize` module only understands Python syntax.
         """
-        raw_tokens = self._tokenize_python(text) if is_python else None
+        if language == "python":
+            raw_tokens = self._tokenize_python(text)
+        elif language in _GENERIC_CODE_LANGUAGES:
+            raw_tokens = self._tokenize_code(text, language)
+        else:
+            raw_tokens = None
+
         if raw_tokens is None:
             raw_tokens = self._tokenize_prose(text)
 
@@ -111,6 +129,19 @@ class Preprocessor:
             nltk.download("punkt")
             nltk.download("punkt_tab")
             return word_tokenize(text)
+
+    def _tokenize_code(self, text: str, language: str) -> list[str] | None:
+        """Tokenize Java/C/C++ source into lowercased identifier/number tokens.
+
+        Comments and string/char literals are stripped first (their content
+        is irrelevant to structural similarity and can trigger false
+        matches), then identifiers, keywords, and numeric literals are
+        extracted via regex. Returns None (falling back to prose
+        tokenization) if nothing survives.
+        """
+        stripped = strip_comments_and_strings(text, language)
+        tokens = _CODE_TOKEN_RE.findall(stripped)
+        return [t.lower() for t in tokens] if tokens else None
 
     def _tokenize_python(self, text: str) -> list[str] | None:
         """Tokenize Python source into lowercased identifier/literal tokens.

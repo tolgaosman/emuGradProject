@@ -1,7 +1,7 @@
 import { useCallback, useId, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
+import type { Mode } from '../api/types'
 
-const SUPPORTED_EXTENSIONS = ['.txt', '.py', '.pdf', '.docx']
 const MAX_BYTES = 10 * 1024 * 1024
 const MAX_FILES = 50
 
@@ -14,6 +14,7 @@ interface DropZoneProps {
   files: File[]
   onFilesChange: (files: File[]) => void
   disabled?: boolean
+  mode?: Mode
 }
 
 function formatBytes(bytes: number): string {
@@ -27,40 +28,46 @@ function extensionOf(name: string): string {
   return dot === -1 ? '' : name.slice(dot).toLowerCase()
 }
 
-function validate(candidate: File[], existingCount: number): { accepted: File[]; rejections: FileRejection[] } {
-  const accepted: File[] = []
-  const rejections: FileRejection[] = []
-  let count = existingCount
-
-  for (const file of candidate) {
-    if (!SUPPORTED_EXTENSIONS.includes(extensionOf(file.name))) {
-      rejections.push({ name: file.name, reason: 'Unsupported format' })
-      continue
-    }
-    if (file.size === 0) {
-      rejections.push({ name: file.name, reason: 'File is empty' })
-      continue
-    }
-    if (file.size > MAX_BYTES) {
-      rejections.push({ name: file.name, reason: 'Exceeds 10 MB limit' })
-      continue
-    }
-    if (count >= MAX_FILES) {
-      rejections.push({ name: file.name, reason: `Batch limit of ${MAX_FILES} files reached` })
-      continue
-    }
-    accepted.push(file)
-    count += 1
-  }
-
-  return { accepted, rejections }
-}
-
-export function DropZone({ files, onFilesChange, disabled }: DropZoneProps) {
+export function DropZone({ files, onFilesChange, disabled, mode }: DropZoneProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [rejections, setRejections] = useState<FileRejection[]>([])
+  const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload')
+  const [pastedText, setPastedText] = useState('')
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const isTextMode = mode === 'ai_text' || mode === 'text_similarity'
+  const supportedExtensions = isTextMode ? ['.txt', '.pdf', '.docx'] : ['.txt', '.py', '.pdf', '.docx']
+  const extensionsDisplay = isTextMode ? '.txt · .pdf · .docx' : '.txt · .py · .pdf · .docx'
+
+  const validate = useCallback((candidate: File[], existingCount: number): { accepted: File[]; rejections: FileRejection[] } => {
+    const accepted: File[] = []
+    const newRejections: FileRejection[] = []
+    let count = existingCount
+
+    for (const file of candidate) {
+      if (!supportedExtensions.includes(extensionOf(file.name))) {
+        newRejections.push({ name: file.name, reason: 'Unsupported format for selected mode' })
+        continue
+      }
+      if (file.size === 0) {
+        newRejections.push({ name: file.name, reason: 'File is empty' })
+        continue
+      }
+      if (file.size > MAX_BYTES) {
+        newRejections.push({ name: file.name, reason: 'Exceeds 10 MB limit' })
+        continue
+      }
+      if (count >= MAX_FILES) {
+        newRejections.push({ name: file.name, reason: `Batch limit of ${MAX_FILES} files reached` })
+        continue
+      }
+      accepted.push(file)
+      count += 1
+    }
+
+    return { accepted, rejections: newRejections }
+  }, [supportedExtensions])
 
   const addFiles = useCallback(
     (incoming: FileList | File[]) => {
@@ -68,7 +75,7 @@ export function DropZone({ files, onFilesChange, disabled }: DropZoneProps) {
       if (accepted.length > 0) onFilesChange([...files, ...accepted])
       setRejections(newRejections)
     },
-    [files, onFilesChange],
+    [files, onFilesChange, validate],
   )
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -84,45 +91,109 @@ export function DropZone({ files, onFilesChange, disabled }: DropZoneProps) {
     onFilesChange(next)
   }
 
+  const handlePasteSubmit = () => {
+    if (!pastedText.trim()) return
+    const file = new File([pastedText], `pasted_text_${files.length + 1}.txt`, { type: 'text/plain' })
+    addFiles([file])
+    setPastedText('')
+    setActiveTab('upload')
+  }
+
   return (
     <div className="dropzone-wrap">
-      <div
-        className={`dropzone${isDragging ? ' dropzone-active' : ''}${disabled ? ' dropzone-disabled' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault()
-          if (!disabled) setIsDragging(true)
-        }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-      >
-        <label htmlFor={inputId} className="dropzone-label">
-          <div className="dropzone-icon" aria-hidden="true">
-            ⇪
-          </div>
-          <p className="dropzone-title">Drop files to compare</p>
-          <p className="dropzone-hint">
-            .txt · .py · .pdf · .docx — up to 10 MB each, {MAX_FILES} files max
-          </p>
-          <span className="btn btn-secondary dropzone-browse">Browse files</span>
-        </label>
-        <input
-          ref={inputRef}
-          id={inputId}
-          type="file"
-          multiple
-          accept={SUPPORTED_EXTENSIONS.join(',')}
+      <div className="dropzone-tabs" style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+        <button
+          type="button"
+          className={`btn ${activeTab === 'upload' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setActiveTab('upload')}
           disabled={disabled}
-          onChange={(e) => {
-            if (e.target.files) addFiles(e.target.files)
-            e.target.value = ''
-          }}
-        />
+        >
+          Upload Files
+        </button>
+        <button
+          type="button"
+          className={`btn ${activeTab === 'paste' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setActiveTab('paste')}
+          disabled={disabled}
+        >
+          Paste Text
+        </button>
       </div>
+
+      {activeTab === 'upload' ? (
+        <div
+          className={`dropzone${isDragging ? ' dropzone-active' : ''}${disabled ? ' dropzone-disabled' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault()
+            if (!disabled) setIsDragging(true)
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+        >
+          <label htmlFor={inputId} className="dropzone-label">
+            <div className="dropzone-icon" aria-hidden="true">
+              ⇪
+            </div>
+            <p className="dropzone-title">Drop files to compare</p>
+            <p className="dropzone-hint">
+              {extensionsDisplay} — up to 10 MB each, {MAX_FILES} files max
+            </p>
+            <span className="btn btn-secondary dropzone-browse">Browse files</span>
+          </label>
+          <input
+            ref={inputRef}
+            id={inputId}
+            type="file"
+            multiple
+            accept={supportedExtensions.join(',')}
+            disabled={disabled}
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files)
+              e.target.value = ''
+            }}
+          />
+        </div>
+      ) : (
+        <div className="paste-area">
+          <textarea
+            value={pastedText}
+            onChange={(e) => setPastedText(e.target.value)}
+            disabled={disabled}
+            placeholder="Paste your text here (up to 15,000 characters)..."
+            maxLength={15000}
+            style={{
+              width: '100%',
+              minHeight: '200px',
+              padding: '1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              fontFamily: 'inherit',
+              resize: 'vertical',
+              marginBottom: '1rem'
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              {pastedText.length} / 15,000 characters
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handlePasteSubmit}
+              disabled={disabled || !pastedText.trim()}
+            >
+              Add as Text File
+            </button>
+          </div>
+        </div>
+      )}
 
       {rejections.length > 0 && (
         <ul className="dropzone-rejections" role="alert">
-          {rejections.map((r) => (
-            <li key={r.name}>
+          {rejections.map((r, i) => (
+            <li key={`${r.name}-${i}`}>
               <strong>{r.name}</strong> — {r.reason}
             </li>
           ))}

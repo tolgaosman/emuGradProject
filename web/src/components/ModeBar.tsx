@@ -1,44 +1,43 @@
-import type { Algorithm } from '../api/types'
+import type { Mode } from '../api/types'
 
-const LABELS: Record<Algorithm, string> = {
-  cosine: 'Cosine',
-  winnowing: 'Winnowing',
-  jaccard: 'Jaccard',
-  ast: 'AST',
-  all: 'All',
+const LABELS: Record<Mode, string> = {
+  code_similarity: 'Code Similarity',
+  text_similarity: 'Text Similarity',
+  ai_code: 'AI Code Check',
+  ai_text: 'AI Text Check',
 }
 
-interface AlgorithmBarProps {
-  algorithms: Algorithm[]
-  algorithm: Algorithm
-  onAlgorithmChange: (algorithm: Algorithm) => void
+interface ModeBarProps {
+  modes: Mode[]
+  mode: Mode
+  onModeChange: (mode: Mode) => void
   threshold: number
   onThresholdChange: (threshold: number) => void
   disabled?: boolean
 }
 
-export function AlgorithmBar({
-  algorithms,
-  algorithm,
-  onAlgorithmChange,
+export function ModeBar({
+  modes,
+  mode,
+  onModeChange,
   threshold,
   onThresholdChange,
   disabled,
-}: AlgorithmBarProps) {
+}: ModeBarProps) {
   return (
     <div className="algorithm-bar">
-      <div className="algorithm-segmented" role="radiogroup" aria-label="Similarity algorithm">
-        {algorithms.map((a) => (
+      <div className="algorithm-segmented" role="radiogroup" aria-label="Scanning mode">
+        {modes.map((m) => (
           <button
-            key={a}
+            key={m}
             type="button"
             role="radio"
-            aria-checked={a === algorithm}
-            className={`segment${a === algorithm ? ' segment-active' : ''}`}
+            aria-checked={m === mode}
+            className={`segment${m === mode ? ' segment-active' : ''}`}
             disabled={disabled}
-            onClick={() => onAlgorithmChange(a)}
+            onClick={() => onModeChange(m)}
           >
-            {LABELS[a] ?? a}
+            {LABELS[m] ?? m}
           </button>
         ))}
       </div>

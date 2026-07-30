@@ -56,11 +56,11 @@ def test_exclusions_absent_file_is_noop():
 
 
 def test_python_source_tokenized_via_tokenize_module():
-    """is_python=True keeps identifiers/keywords intact instead of running
+    """language='python' keeps identifiers/keywords intact instead of running
     prose punctuation-stripping over the source."""
     pre = Preprocessor(k=2, exclusions_path="__no_such_file__")
     code = "def add(alpha, beta):\n    return alpha + beta\n"
-    tokens, _ = pre.process(code, is_python=True)
+    tokens, _ = pre.process(code, language="python")
     assert pre.stemmer.stem("alpha") in tokens
     assert pre.stemmer.stem("add") in tokens
 
@@ -70,6 +70,33 @@ def test_python_source_falls_back_to_prose_on_syntax_error():
     instead of raising."""
     pre = Preprocessor(k=2, exclusions_path="__no_such_file__")
     broken = "def broken(:\n    alpha beta\n"
-    tokens, _ = pre.process(broken, is_python=True)
+    tokens, _ = pre.process(broken, language="python")
     assert isinstance(tokens, list)
     assert pre.stemmer.stem("alpha") in tokens
+
+
+def test_java_source_tokenized_via_generic_code_tokenizer():
+    """language='java' strips comments/strings and extracts identifiers."""
+    pre = Preprocessor(k=2, exclusions_path="__no_such_file__")
+    code = (
+        "public class Sum {\n"
+        "    // adds two ints\n"
+        "    int add(int alpha, int beta) {\n"
+        "        return alpha + beta;\n"
+        "    }\n"
+        "}\n"
+    )
+    tokens, _ = pre.process(code, language="java")
+    assert pre.stemmer.stem("alpha") in tokens
+    assert pre.stemmer.stem("class") in tokens
+    assert "adds" not in tokens  # comment content must not leak into tokens
+
+
+def test_cpp_source_uses_slash_slash_comments_not_hash():
+    """C++ comments use //, not Python's #; a # inside a string must not be
+    mistaken for a comment marker either."""
+    pre = Preprocessor(k=1, exclusions_path="__no_such_file__")
+    code = '#include <iostream>\nint main() {\n    // print a hashtag glyph\n    return 0;\n}\n'
+    tokens, _ = pre.process(code, language="cpp")
+    assert "glyph" not in tokens  # only reachable if the // comment was stripped
+    assert pre.stemmer.stem("include") in tokens

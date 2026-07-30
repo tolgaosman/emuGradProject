@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react'
-import { getAlgorithms } from './api/client'
-import type { Algorithm } from './api/types'
-import { AlgorithmBar } from './components/AlgorithmBar'
+import { getModes } from './api/client'
+import type { Mode } from './api/types'
+import { AIDetectionResults } from './components/AIDetectionResults'
 import { ComparisonInspector } from './components/ComparisonInspector'
 import { DropZone } from './components/DropZone'
 import { EmptyState } from './components/EmptyState'
 import { HeatmapGrid } from './components/HeatmapGrid'
+import { ModeBar } from './components/ModeBar'
 import { SkeletonLoader } from './components/SkeletonLoader'
 import { useScan } from './hooks/useScan'
 import './styles/app.css'
+import darkModeLogo from './assets/darkModeLogo.png'
+import lightModeLogo from './assets/lightModeLogo.png'
 
 interface SelectedPair {
   fileA: string
@@ -18,27 +21,40 @@ interface SelectedPair {
 
 function App() {
   const [files, setFiles] = useState<File[]>([])
-  const [algorithms, setAlgorithms] = useState<Algorithm[]>([])
-  const [algorithm, setAlgorithm] = useState<Algorithm>('cosine')
+  const [modes, setModes] = useState<Mode[]>([])
+  const [mode, setMode] = useState<Mode>('text_similarity')
   const [threshold, setThreshold] = useState(0.7)
   const [selectedPair, setSelectedPair] = useState<SelectedPair | null>(null)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
+
+  useEffect(() => {
+    // Sync theme with HTML data-theme attribute
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
+  }
   const { state, start, reset } = useScan()
 
   useEffect(() => {
-    getAlgorithms()
+    getModes()
       .then((list) => {
-        setAlgorithms(list)
-        setAlgorithm((current) => (list.includes(current) ? current : (list[0] ?? current)))
+        setModes(list)
+        setMode((current) => (list.includes(current) ? current : (list[0] ?? current)))
       })
-      .catch(() => setAlgorithms(['cosine', 'winnowing', 'jaccard', 'ast', 'all']))
+      .catch(() => setModes(['code_similarity', 'text_similarity', 'ai_code', 'ai_text']))
   }, [])
 
   const isBusy = state.status === 'uploading' || state.status === 'processing'
-  const canScan = files.length >= 2 && !isBusy
+  // Similarity requires 2 files, AI check requires 1+
+  const isAiMode = mode === 'ai_code' || mode === 'ai_text'
+  const minFiles = isAiMode ? 1 : 2
+  const canScan = files.length >= minFiles && !isBusy
 
   const handleScan = () => {
     if (!canScan) return
-    start(files, algorithm, threshold)
+    start(files, mode, threshold)
   }
 
   const handleReset = () => {
@@ -50,24 +66,38 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="app-header-inner">
-          <span className="app-mark">◆</span>
-          <div>
-            <h1>PlagCheck</h1>
-            <p className="app-tagline">Local-execution plagiarism &amp; similarity detection</p>
+        <div className="app-header-inner" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            {theme === 'dark' ? (
+              <img src={darkModeLogo} alt="PlagCheck Logo" style={{ height: '40px' }} />
+            ) : (
+              <img src={lightModeLogo} alt="PlagCheck Logo" style={{ height: '40px' }} />
+            )}
+            <div>
+              <p className="app-tagline">Local-execution similarity &amp; AI detection</p>
+            </div>
           </div>
+          <button 
+            type="button" 
+            className="btn btn-ghost" 
+            onClick={toggleTheme}
+            aria-label="Toggle theme"
+            style={{ fontSize: '1.25rem', padding: '0.25rem 0.5rem' }}
+          >
+            {theme === 'light' ? '🌙' : '☀️'}
+          </button>
         </div>
       </header>
 
       <main className="app-main">
         {state.status !== 'ready' && (
           <section className="panel">
-            <DropZone files={files} onFilesChange={setFiles} disabled={isBusy} />
+            <DropZone files={files} onFilesChange={setFiles} disabled={isBusy} mode={mode} />
 
-            <AlgorithmBar
-              algorithms={algorithms}
-              algorithm={algorithm}
-              onAlgorithmChange={setAlgorithm}
+            <ModeBar
+              modes={modes}
+              mode={mode}
+              onModeChange={setMode}
               threshold={threshold}
               onThresholdChange={setThreshold}
               disabled={isBusy}
@@ -96,7 +126,7 @@ function App() {
             )}
 
             {state.status === 'processing' && (
-              <SkeletonLoader label="Computing similarities…" sublabel={`Algorithm: ${algorithm}`} />
+              <SkeletonLoader label="Computing results…" sublabel={`Mode: ${mode}`} />
             )}
 
             {state.status === 'error' && (
@@ -109,7 +139,15 @@ function App() {
               <EmptyState
                 icon="⇪"
                 title="No files yet"
-                description="Drop 2–50 supported files above to check for similarity."
+                description={`Drop ${isAiMode ? '1' : '2'}–50 supported files above to check.`}
+              />
+            )}
+            
+            {files.length === 1 && state.status === 'idle' && !isAiMode && (
+              <EmptyState
+                icon="⚠"
+                title="Need another file"
+                description="Similarity scans require at least 2 files to compare."
               />
             )}
           </section>
@@ -121,9 +159,7 @@ function App() {
               <div>
                 <h2>Results</h2>
                 <p className="app-tagline">
-                  {state.result.pairs.filter((p) => p.flagged).length} of {state.result.pairs.length} pairs
-                  flagged &middot; algorithm: {state.result.algorithm} &middot; threshold:{' '}
-                  {state.result.threshold.toFixed(2)}
+                  Mode: {state.result.mode} &middot; threshold: {state.result.threshold.toFixed(2)}
                 </p>
               </div>
               <button type="button" className="btn btn-secondary" onClick={handleReset}>
@@ -141,15 +177,26 @@ function App() {
               </ul>
             )}
 
-            {state.result.matrix.names.length > 0 ? (
-              <HeatmapGrid
-                names={state.result.matrix.names}
-                scores={state.result.matrix.scores}
-                threshold={state.result.threshold}
-                onCellClick={(fileA, fileB, score) => setSelectedPair({ fileA, fileB, score })}
-              />
+            {/* AI RESULTS */}
+            {(state.result.mode === 'ai_code' || state.result.mode === 'ai_text') ? (
+              <AIDetectionResults scores={state.result.ai_scores} />
             ) : (
-              <EmptyState title="No comparable files" description="Every uploaded file was rejected." />
+              /* SIMILARITY RESULTS */
+              state.result.matrix?.names.length ? (
+                <>
+                  <p className="app-tagline" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+                    {state.result.pairs.filter((p) => p.flagged).length} of {state.result.pairs.length} pairs flagged
+                  </p>
+                  <HeatmapGrid
+                    names={state.result.matrix.names}
+                    scores={state.result.matrix.scores}
+                    threshold={state.result.threshold}
+                    onCellClick={(fileA, fileB, score) => setSelectedPair({ fileA, fileB, score })}
+                  />
+                </>
+              ) : (
+                <EmptyState title="No comparable files" description="Every uploaded file was rejected." />
+              )
             )}
           </section>
         )}

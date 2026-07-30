@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { runCheck } from '../api/client'
-import type { Algorithm, CheckResponse } from '../api/types'
+import type { Mode, CheckResponse } from '../api/types'
 import { ApiError } from '../api/types'
 
 export type ScanState =
@@ -14,13 +14,13 @@ export function useScan() {
   const [state, setState] = useState<ScanState>({ status: 'idle' })
   const generation = useRef(0)
 
-  const start = useCallback((files: File[], algorithm: Algorithm, threshold: number) => {
+  const start = useCallback((files: File[], mode: Mode, threshold: number) => {
     const myGeneration = ++generation.current
     setState({ status: 'uploading', progress: 0 })
 
     runCheck({
       files,
-      algorithm,
+      mode,
       threshold,
       onProgress: (fraction) => {
         if (myGeneration !== generation.current) return
