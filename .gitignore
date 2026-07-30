@@ -1,0 +1,34 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.local
+
+# Logs
+*.log
+
+# Generated scan artifacts (keep the directory placeholder)
+/output/*
+!/output/.gitkeep
+
+# Node / React (web/)
+node_modules/
+web/dist/
+web/.vite/
+web/*.local
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+
+# Archives (submission bundles are build output, not source)
+*.zip

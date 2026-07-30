@@ -13,16 +13,26 @@ CREATE TABLE IF NOT EXISTS app_user (
 
 CREATE INDEX IF NOT EXISTS idx_user_email ON app_user (user_email);
 
+-- Seed a system account so scan_request.user_id has something to reference
+-- until real authentication exists (the API/CLI run unauthenticated).
+INSERT INTO app_user (user_name, user_email, user_role)
+VALUES ('system', 'system@plagcheck.local', 'admin')
+ON CONFLICT (user_email) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS scan_request (
  scan_id SERIAL PRIMARY KEY,
+ -- Public API identifier. scan_id (SERIAL) stays the internal PK/FK target;
+ -- scan_uuid is what clients see and pass back to GET /api/report/<uuid>.
+ scan_uuid UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
  user_id INTEGER NOT NULL REFERENCES app_user(user_id) ON DELETE RESTRICT,
  scan_timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
  threshold FLOAT NOT NULL DEFAULT 0.70 CHECK (threshold > 0 AND threshold < 1),
  status VARCHAR(20) NOT NULL DEFAULT 'pending'
  CHECK (status IN ('pending','running','complete','error'))
-); 
+);
 
-CREATE INDEX IF NOT EXISTS idx_scan_user ON scan_request (user_id); 
+CREATE INDEX IF NOT EXISTS idx_scan_user ON scan_request (user_id);
+CREATE INDEX IF NOT EXISTS idx_scan_uuid ON scan_request (scan_uuid);
 
 CREATE TABLE IF NOT EXISTS scan_file (
  file_id SERIAL PRIMARY KEY,

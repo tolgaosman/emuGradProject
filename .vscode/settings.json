@@ -1,12 +1,12 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}\\plagcheck\\venv\\Scripts\\python.exe",
+  "python.defaultInterpreterPath": "${workspaceFolder}/plagcheck/venv/Scripts/python.exe",
   "python.analysis.extraPaths": [
-    "${workspaceFolder}\\plagcheck\\src",
-    "${workspaceFolder}\\plagcheck",
-    "${workspaceFolder}\\plagcheck\\venv\\Lib\\site-packages"
+    "${workspaceFolder}/plagcheck/src",
+    "${workspaceFolder}/plagcheck",
+    "${workspaceFolder}/plagcheck/venv/Lib/site-packages"
   ],
   "python.analysis.typeCheckingMode": "basic",
-  "python.envFile": "${workspaceFolder}\\plagcheck\\.env",
+  "python.envFile": "${workspaceFolder}/plagcheck/.env",
   "python.analysis.autoSearchPaths": true,
   "python.analysis.useLibraryCodeForTypes": true
 }

@@ -1,0 +1,36 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["plagcheck/venv", "web", "output", "samples"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "D",   # pydocstyle (PEP 257)
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+]
+ignore = [
+    "D203", # one-blank-line-before-class (conflicts with D211)
+    "D213", # multi-line-summary-second-line (conflicts with D212)
+    "D210", # module docstrings use a deliberate " name.py — desc. " banner style
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+"plagcheck/plagcheck.py" = ["D"]
+"plagcheck/app.py" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra --cov=plagcheck/src --cov-report=term-missing --cov-fail-under=90"
+
+[tool.coverage.run]
+source = ["plagcheck/src"]

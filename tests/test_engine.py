@@ -1,6 +1,5 @@
 """ test_engine.py — AlgorithmEngine pairwise computation. """
 import pytest
-
 from src.engine import AlgorithmEngine
 
 

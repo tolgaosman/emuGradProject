@@ -1,6 +1,5 @@
 """ test_cosine.py — CosineModel (TF-IDF cosine similarity). """
 import pytest
-
 from src.models.cosine import CosineModel
 
 
@@ -25,3 +24,10 @@ def test_tc11_disjoint_tokens_zero_similarity(model):
 def test_empty_input_returns_zero(model):
     assert model.compute([], ["a", "b"]) == 0.0
     assert model.compute(["a"], []) == 0.0
+
+
+def test_single_char_tokens_empty_vocabulary_returns_zero(model):
+    """Single-character tokens fall outside TfidfVectorizer's default token
+    pattern, so the vocabulary is empty and compute() must return 0.0
+    instead of propagating the ValueError."""
+    assert model.compute(["a"], ["b"]) == 0.0

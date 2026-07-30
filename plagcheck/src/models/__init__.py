@@ -1,8 +1,8 @@
 """ __init__.py — Models package. """
+from .ast_model import ASTModel
 from .base import SimilarityModel
 from .cosine import CosineModel
-from .winnowing import WinnowingModel
 from .jaccard import JaccardModel
-from .ast_model import ASTModel
+from .winnowing import WinnowingModel
 
 __all__ = ["SimilarityModel", "CosineModel", "WinnowingModel", "JaccardModel", "ASTModel"]

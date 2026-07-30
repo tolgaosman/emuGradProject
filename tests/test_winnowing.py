@@ -1,6 +1,5 @@
 """ test_winnowing.py — WinnowingModel fingerprint similarity. """
 import pytest
-
 from src.models.winnowing import WinnowingModel
 
 

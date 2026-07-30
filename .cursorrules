@@ -1,0 +1,25 @@
+# Cursor rules — PlagCheck
+
+See CLAUDE.md for the full architectural ground truth (formats, limits, NLP
+pipeline, the 4 similarity engines, DB schema, interfaces). This file is the
+condensed version for inline Cursor completions.
+
+## Design law
+- Vercel × Anthropic aesthetic: minimalist, monochrome/muted-pastel,
+  high-contrast typography. No default browser colors, no raw unstyled grids.
+- Every frontend state transition gets a smooth, organic animation
+  (`cubic-bezier` easing, not linear). Target 60 fps.
+- Handle every edge case explicitly: loading, error + rollback, empty
+  directory, unsafe filename, oversize file, >50 files, API unreachable.
+
+## Code law
+- Python: strict PEP 8 / PEP 257, type hints everywhere, `ruff check` clean.
+- React: TypeScript, component-driven, one clear state shape per feature
+  (discriminated unions over scattered booleans), no UI-kit dependency.
+- DRY: reuse `FileLoader`, `Preprocessor`, `AlgorithmEngine`,
+  `ComparisonMatrix`, `ReportGenerator`, `AuditLogger`,
+  `ScanRepository` — never re-implement their logic.
+- No bare `open()` without a context manager. No silent `except: pass`.
+- Flask API takes file **uploads** (multipart), never server file paths.
+- Before moving to the next task: code must run, `ruff check` must pass,
+  and the relevant tests must be green.

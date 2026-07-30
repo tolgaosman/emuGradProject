@@ -1,22 +1,21 @@
 {
-  "venvPath": "d:\\Documents\\GitHub\\emuGradProject\\plagcheck",
+  "venvPath": "plagcheck",
   "venv": "venv",
-  "pythonVersion": "3.14",
+  "pythonVersion": "3.12",
   "pythonPlatform": "Windows",
   "typeCheckingMode": "basic",
   "executionEnvironments": [
     {
-      "root": "d:\\Documents\\GitHub\\emuGradProject\\plagcheck",
+      "root": "plagcheck",
       "extraPaths": [
-        "d:\\Documents\\GitHub\\emuGradProject\\plagcheck",
-        "d:\\Documents\\GitHub\\emuGradProject\\plagcheck\\src",
-        "d:\\Documents\\GitHub\\emuGradProject\\plagcheck\\venv\\Lib\\site-packages"
+        "plagcheck",
+        "plagcheck/src"
       ]
     }
   ],
   "extraPaths": [
-    "d:\\Documents\\GitHub\\emuGradProject\\plagcheck",
-    "d:\\Documents\\GitHub\\emuGradProject\\plagcheck\\src",
-    "d:\\Documents\\GitHub\\emuGradProject\\plagcheck\\venv\\Lib\\site-packages"
+    "plagcheck",
+    "plagcheck/src"
   ]
 }
+

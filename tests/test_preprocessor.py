@@ -53,3 +53,23 @@ def test_exclusions_absent_file_is_noop():
     tokens, _ = pre.process("methodology detection algorithm")
     # Without the exclusion list, 'methodology' stem survives.
     assert pre.stemmer.stem("methodology") in tokens
+
+
+def test_python_source_tokenized_via_tokenize_module():
+    """is_python=True keeps identifiers/keywords intact instead of running
+    prose punctuation-stripping over the source."""
+    pre = Preprocessor(k=2, exclusions_path="__no_such_file__")
+    code = "def add(alpha, beta):\n    return alpha + beta\n"
+    tokens, _ = pre.process(code, is_python=True)
+    assert pre.stemmer.stem("alpha") in tokens
+    assert pre.stemmer.stem("add") in tokens
+
+
+def test_python_source_falls_back_to_prose_on_syntax_error():
+    """Unparseable Python source still yields tokens via the prose fallback,
+    instead of raising."""
+    pre = Preprocessor(k=2, exclusions_path="__no_such_file__")
+    broken = "def broken(:\n    alpha beta\n"
+    tokens, _ = pre.process(broken, is_python=True)
+    assert isinstance(tokens, list)
+    assert pre.stemmer.stem("alpha") in tokens
