@@ -1,6 +1,5 @@
-export type Mode = 'code_similarity' | 'text_similarity' | 'ai_code' | 'ai_text'
+export type Mode = 'code_similarity' | 'text_similarity'
 export type Language = 'text' | 'python' | 'java' | 'c' | 'cpp'
-export type AIBand = 'low' | 'possible' | 'likely'
 export type Algorithm = 'auto' | 'cosine' | 'winnowing' | 'jaccard' | 'ast'
 
 export interface AlgorithmsResponse {
@@ -31,40 +30,10 @@ export interface FileError {
   error: string
 }
 
-export interface AISignal {
-  name: string
-  score: number
-  weight: number
-}
-
-export interface AISegment {
-  start: number
-  end: number
-  probability: number
-}
-
-export interface AIScore {
-  file: string
-  overall_probability: number
-  band: AIBand
-  signals: AISignal[]
-  segments: AISegment[]
-}
-
 export interface SourceContribution {
   source: string
   contribution: number
   spans: [number, number][]
-}
-
-/** One fetched web page compared against an uploaded file, from the
- * "compare against the internet" feature (code_similarity/text_similarity
- * only — see plagcheck/src/websearch.py). */
-export interface WebMatch {
-  query: string
-  url: string
-  title: string
-  score: number
 }
 
 export interface CheckResponse {
@@ -77,12 +46,6 @@ export interface CheckResponse {
   pairs: SimilarityPair[]
   similarity_indices: Record<string, number>
   source_breakdowns: Record<string, SourceContribution[]>
-  web_matches: Record<string, WebMatch[]>
-  /** True when include_web defaulted to on but the server has no
-   * WEB_SEARCH_API_KEY/WEB_SEARCH_ENGINE_ID configured — the scan still
-   * completed, just without internet comparison. */
-  web_search_unavailable: boolean
-  ai_scores: AIScore[]
   errors: FileError[]
 }
 
@@ -121,7 +84,6 @@ export interface ReportResponse {
   timestamp: string
   files: ScanFileMeta[]
   pairs: SimilarityPair[]
-  ai_scores: AIScore[]
   source_breakdowns: Record<string, SourceContribution[]>
 }
 

@@ -1,9 +1,9 @@
 """ language.py — Single source of truth for language/mode concerns.
 
 Nothing outside this module should hard-code a file extension, a per-mode
-allow-list, or a language's comment syntax — loader, preprocessor, engine,
-and the AI detector all import from here so the four supported languages
-(prose "text", python, java, c, cpp) stay consistent across the pipeline.
+allow-list, or a language's comment syntax — loader, preprocessor, and
+engine all import from here so the supported languages (prose "text",
+python, java, c, cpp) stay consistent across the pipeline.
 """
 import re
 
@@ -21,19 +21,17 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".hpp": "cpp",
 }
 
-#: The four user-facing scanning modes.
-MODES = {"code_similarity", "text_similarity", "ai_code", "ai_text"}
+#: The two user-facing scanning modes.
+MODES = {"code_similarity", "text_similarity"}
 
-#: Which extensions each mode accepts, per the product spec: text modes take
-#: .txt/.pdf/.docx, code modes take .py/.java/.c/.cpp.
+#: Which extensions each mode accepts, per the product spec: text mode takes
+#: .txt/.pdf/.docx, code mode takes .py/.java/.c/.cpp.
 _TEXT_EXTENSIONS = {".txt", ".pdf", ".docx"}
 _CODE_EXTENSIONS = {".py", ".java", ".c", ".h", ".cpp", ".cc", ".hpp"}
 
 MODE_EXTENSIONS: dict[str, set[str]] = {
     "text_similarity": _TEXT_EXTENSIONS,
-    "ai_text": _TEXT_EXTENSIONS,
     "code_similarity": _CODE_EXTENSIONS,
-    "ai_code": _CODE_EXTENSIONS,
 }
 
 #: (line-comment prefix, block-comment start, block-comment end) per language.
@@ -71,10 +69,10 @@ def line_comment_prefix(language: str) -> str | None:
 def strip_comments_and_strings(text: str, language: str) -> str:
     """Remove comments and string literals from `text` for `language`.
 
-    Used by both the code tokenizer and the AI-detector's structural signals
-    so line-length/uniformity measurements aren't skewed by long string
-    literals or comment text. Python is intentionally excluded — its own
-    `tokenize`-based path already separates comments/strings without regex.
+    Used by the generic code tokenizer (`preprocessor.py`) so comment/string
+    content doesn't get mistaken for identifier tokens. Python is
+    intentionally excluded — its own `tokenize`-based path already separates
+    comments/strings without regex.
     """
     line_cm, block_start, block_end = COMMENT_SYNTAX.get(language, (None, None, None))
     out = text

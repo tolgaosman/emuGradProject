@@ -5,7 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 PlagCheck is a secure, local-execution plagiarism and file-similarity detection
 system built for the CMSE 405 graduation project. It ships as a Python CLI
 (`plagcheck/plagcheck.py`), a Flask REST API (`plagcheck/app.py`), and a React
-web UI (`web/`).
+web UI (`web/`). **It is intentionally offline-only** — file-vs-file similarity
+comparison, nothing more. There is no AI-generation detection and no internet/
+external-API comparison anywhere in the system; both were built and then
+deliberately removed to keep the project aligned with its local-execution
+premise. Don't reintroduce either without being explicitly asked.
 
 ## Commands
 
@@ -33,7 +37,7 @@ CLI and API (run from inside `plagcheck/`, where `from src.…` imports resolve)
 ```bash
 cd plagcheck
 venv/Scripts/python.exe plagcheck.py --files ../samples/sample_a.txt ../samples/sample_b.txt \
-    --algorithm all --threshold 0.5 --output ../output
+    --mode text_similarity --threshold 0.5 --output ../output
 venv/Scripts/python.exe app.py        # Flask on :5000
 ```
 
@@ -53,35 +57,49 @@ npx tsc -b       # typecheck only
 Keep every change aligned with this. If a change would contradict it, stop
 and flag the conflict instead of silently diverging.
 
-**Supported formats:** `.txt`, `.py`, `.pdf` (pdfplumber → PyMuPDF fallback),
-`.docx` (python-docx). Hard limits: max 10 MB per file, max 50 files per batch.
+**Two user-facing modes, not four algorithms directly:** `text_similarity`
+and `code_similarity` (`plagcheck/src/language.py`'s `MODES`). Each mode
+composes 1-2 of the four underlying algorithms into a designed blend — the
+`algorithm` parameter (`auto` | `cosine` | `winnowing` | `jaccard` | `ast`)
+lets a caller force a single one instead, for demoing/reviewing each
+individually. `text_similarity` accepts `.txt`/`.pdf`/`.docx`; `code_similarity`
+accepts `.py`/`.java`/`.c`/`.h`/`.cpp`/`.cc`/`.hpp`. Hard limits: max 10 MB per
+file, max 50 files per batch. A single uploaded file is a valid scan — it just
+produces an empty pair list (no artificial 2-file minimum).
 
 **NLP pipeline** (`plagcheck/src/preprocessor.py`): (1) lowercase, (2) strip
 punctuation via regex, (3) NLTK word tokenization, (4) remove NLTK English
 stopwords + `config/exclusions.txt`, (5) Porter stemming, (6) 5-gram sliding
-window generation. Python source (`is_python=True`) is tokenized with the
-`tokenize` module instead, falling back to the prose path when the source
-fails to tokenize.
+window generation. Python source (`language="python"`) is tokenized with the
+`tokenize` module instead; Java/C/C++ (`language in {"java","c","cpp"}`) use a
+generic regex tokenizer (`language.strip_comments_and_strings` +
+identifier/number extraction) since Python's `tokenize` module only
+understands Python syntax. Both code paths fall back to the prose path if
+tokenizing fails.
 
 **The four similarity engines** (`plagcheck/src/models/`), one class per file
 behind the `SimilarityModel` ABC in `base.py`:
 
 1. `cosine.py` — TF-IDF cosine similarity via scikit-learn.
 2. `winnowing.py` — SHA-256 rolling-hash fingerprinting (Schleimer et al.
-   2003), `k=5`, `w=4`, Jaccard over fingerprint sets.
+   2003), `k=5`, `w=4`, Jaccard over fingerprint sets. Needs `>= k + w - 1`
+   (8) tokens to produce any fingerprint at all — fewer and it silently
+   returns 0.0; a real gotcha worth remembering when writing fixtures.
 3. `jaccard.py` — Jaccard index over stemmed token sets.
 4. `ast_model.py` — Python `ast` parser, identifier/function/class/attribute
    normalization, Levenshtein distance over `ast.dump()` output. Unlike the
    other three, it receives **raw source** (`[data["raw"]]`), not tokens —
-   AST parsing needs the punctuation the NLP pipeline strips.
+   AST parsing needs the punctuation the NLP pipeline strips. Only applies to
+   Python; Java/C/C++ pairs fall back to winnowing alone.
 
-`engine.py` orchestrates pairwise scans with `itertools.combinations`. The
-`"all"` algorithm is a **fixed weighted blend** (`_ALL_WEIGHTS`), not an
-average: AST carries the largest share (0.40) for Python pairs because it is
-the only rename-invariant signal, and is dropped entirely for non-Python
-pairs with its weight redistributed across the text models. A plain average
-would let the denominator silently shrink when AST is skipped, making scores
-incomparable across a mixed batch — don't revert it to one.
+`engine.py`'s `ScanEngine._compute_pair` is where the two modes' blends live
+(`_CODE_AST_WEIGHT`/`_CODE_WINNOWING_WEIGHT`, `_TEXT_COSINE_WEIGHT`/
+`_TEXT_WINNOWING_WEIGHT`) — a genuine weighted blend, not a plain average, so
+scores stay comparable across mixed-language batches. `ScanEngine.compute()`
+also computes a Turnitin-style per-document **Similarity Index** and ranked
+**source breakdown** (`similarity_index.py`) when given a `preprocessor` —
+asymmetric "% of this document matched something else," distinct from the
+symmetric pairwise matrix.
 
 **Data layer** — PostgreSQL, 3NF, `plagcheck/db/schema.sql`: `app_user`,
 `scan_request`, `scan_file`, `scan_pair`, `scan_algorithm`, `audit_log`.
@@ -100,15 +118,20 @@ stalling every request on a TCP timeout.
   entry with `os.path.abspath()` *before* calling the loader. The loader
   rejects `..` as a path component (traversal defense for untrusted input),
   which would otherwise make ordinary relative paths like `../samples/a.txt`
-  unusable from the CLI.
+  unusable from the CLI. `--algorithm` is a legacy alias for `--mode` (maps
+  `ast`→`code_similarity`, everything else→`text_similarity`).
 - Flask REST API (`plagcheck/app.py`) is **multipart upload-based, never
   path-based** — a browser cannot send server paths, and accepting them is a
   file-read vulnerability. Uploads land in a `tempfile.TemporaryDirectory()`
   sandbox that is always torn down. Endpoints: `GET /api/status`,
-  `GET /api/algorithms`, `POST /api/check`,
-  `GET /api/report/<scan_uuid>`, `GET /api/report/<scan_uuid>/pair/<a>/<b>`,
+  `GET /api/modes`, `GET /api/algorithms`, `POST /api/detect-language`,
+  `POST /api/check`, `GET /api/report/<scan_uuid>`,
+  `GET /api/report/<scan_uuid>/pair/<a>/<b>`,
   `GET /api/report/<scan_uuid>/heatmap.png`. Errors use a
   `{error, code, detail}` envelope; the frontend switches on `code`.
+  `/api/detect-language` is a small offline heuristic (regex signature
+  scoring in `language.py`) for the code paste-box UI — not AI-generation
+  detection, just "is this Python/Java/C/C++."
 
 Raw file text is **not** in the relational schema (it is working data, not a
 durable record). `app.py` keeps it in a JSON sidecar next to the repository's
@@ -120,7 +143,10 @@ fallback files so the pair-comparison endpoint can rehydrate it.
 tokens are CSS variables in `web/src/styles/tokens.css`; component styles in
 `web/src/styles/app.css`. Both `prefers-color-scheme` and
 `prefers-reduced-motion` are honored — keep new styling inside that token
-system rather than hardcoding colors or durations.
+system rather than hardcoding colors or durations. Layout is a fixed
+`Sidebar` (mode picker: Text/Code groups, each with one "Similarity Check"
+entry) plus a two-column content area (`ScanSettings`/`DropZone` on the left,
+results on the right).
 
 - `src/api/client.ts` + `src/api/types.ts` — the only place that talks HTTP.
   `runCheck` uses `XMLHttpRequest` rather than `fetch` specifically to get
@@ -130,7 +156,9 @@ system rather than hardcoding colors or durations.
   so a superseded request can't overwrite newer state. Prefer extending this
   union over adding parallel booleans.
 - `HeatmapGrid` renders the matrix from JSON (not the server PNG) so cells are
-  clickable; the PNG endpoint exists for report export.
+  clickable; the PNG endpoint exists for report export. `CodePane` is the
+  shared line-numbered/span-highlighted source renderer used by the inline
+  `ComparisonInspector` card.
 
 Client-side validation in `DropZone` mirrors the server's limits (extensions,
 10 MB, 50 files) — if you change a limit in `loader.py`, change it there too.
@@ -154,9 +182,14 @@ monkeypatch `_get_connection` to `None` and redirect JSON storage into
 - Never leave stream-of-consciousness comments ("wait, actually...") in
   committed code — resolve the design decision, then write the clean result.
 - Use `with open(...)` for all file I/O; no bare `open().write()`.
-- Reuse `FileLoader`, `Preprocessor`, `AlgorithmEngine`, `ComparisonMatrix`,
+- Reuse `FileLoader`, `Preprocessor`, `ScanEngine`, `ComparisonMatrix`,
   `ReportGenerator`, `AuditLogger`, `ScanRepository` — do not duplicate their
   logic elsewhere.
+- No outbound network calls anywhere in `plagcheck/` — this was tried once
+  (an internet-source-comparison feature via a paid search API) and reverted
+  because it broke the local-execution premise the project is built on. Any
+  future request to add AI-generation detection or external API calls should
+  be flagged back to the user before starting, not built silently.
 
 ## Design law (mirrored in `.cursorrules`)
 

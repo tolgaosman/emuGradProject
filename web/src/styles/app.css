@@ -1013,55 +1013,7 @@
   color: var(--text);
 }
 
-/* ---------- AIDetectionResults ---------- */
-
-.ai-results-container {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.ai-description {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-
-.ai-score-card {
-  gap: var(--space-4);
-}
-
-.ai-signals {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.ai-signal-row {
-  display: grid;
-  grid-template-columns: minmax(120px, 160px) 1fr 3ch;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.ai-signal-name {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  text-transform: capitalize;
-}
-
-.ai-signal-bar-bg {
-  height: 6px;
-}
-
-.ai-signal-value {
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-  text-align: right;
-}
-
-/* ---------- CodePane (comparison + AI segment viewer) ---------- */
+/* ---------- CodePane (comparison viewer) ---------- */
 
 .code-pane {
   max-height: 420px;

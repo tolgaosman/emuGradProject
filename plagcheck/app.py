@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from src.audit import AuditLogger
-from src.engine import ALGORITHMS_BY_MODE, WEB_ELIGIBLE_MODES, ScanEngine
+from src.engine import ALGORITHMS_BY_MODE, ScanEngine
 from src.language import MODES, detect_language, is_allowed_for_mode, language_for_extension
 from src.loader import MAX_BYTES, MAX_FILES, FileLoader, FileLoadError
 from src.matrix import ComparisonMatrix
@@ -16,7 +16,6 @@ from src.preprocessor import Preprocessor
 from src.reporter import ReportGenerator, matched_spans
 from src.repository import ScanRepository
 from src.similarity_index import DEFAULT_MIN_MATCH_WORDS
-from src.websearch import WebSearchClient
 from werkzeug.utils import secure_filename
 
 load_dotenv()
@@ -32,12 +31,6 @@ repository = ScanRepository()
 VALID_MODES = MODES
 
 _TEXT_STORE_DIR = os.path.join(os.path.dirname(__file__), "..", "output", "scans")
-
-#: Modes whose scan record has no pairwise matrix (see engine.ScanResult.is_ai).
-_AI_MODES = {"ai_code", "ai_text"}
-
-WEB_SEARCH_MAX_QUERIES_PER_SCAN = int(os.environ.get("WEB_SEARCH_MAX_QUERIES_PER_SCAN", "5"))
-WEB_SEARCH_BUDGET_SECONDS = float(os.environ.get("WEB_SEARCH_BUDGET_SECONDS", "20"))
 
 
 def _error(message: str, code: str, status: int, **extra):
@@ -74,7 +67,7 @@ def _load_raw_texts(scan_uuid: str) -> dict | None:
 @app.route("/api/status", methods=["GET"])
 def api_status():
     """Liveness check."""
-    return jsonify({"status": "ok", "service": "plagcheck", "version": "3.1.0"})
+    return jsonify({"status": "ok", "service": "plagcheck", "version": "3.2.0"})
 
 
 @app.route("/api/modes", methods=["GET"])
@@ -87,10 +80,9 @@ def api_modes():
 def api_algorithms():
     """List the algorithm choices selectable per mode.
 
-    "auto" is each similarity mode's designed blend (see `engine.py`'s
+    "auto" is each mode's designed blend (see `engine.py`'s
     `_CODE_*_WEIGHT` / `_TEXT_*_WEIGHT`); the rest force a single named
-    model, for demoing/reviewing each algorithm individually. AI modes have
-    no algorithm choice at all.
+    model, for demoing/reviewing each algorithm individually.
     """
     return jsonify({
         "algorithms": sorted({a for choices in ALGORITHMS_BY_MODE.values() for a in choices}),
@@ -102,7 +94,7 @@ def api_algorithms():
 def api_detect_language():
     """Guess which of python/java/c/cpp a pasted code snippet is written in.
 
-    Used by the paste-box UI in code_similarity/ai_code modes so the right
+    Used by the paste-box UI in code_similarity mode so the right
     extension/tokenizer path is picked without asking the user up front.
     """
     body = request.get_json(silent=True) or {}
@@ -130,14 +122,6 @@ def api_check():
         "mode", os.environ.get("DEFAULT_MODE", "text_similarity")
     ).lower()
     algorithm = request.form.get("algorithm", "auto").lower()
-
-    include_web_raw = request.form.get("include_web")
-    include_web_explicit = include_web_raw is not None
-    include_web = (include_web_raw if include_web_explicit else "true").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
 
     try:
         threshold = float(
@@ -176,46 +160,9 @@ def api_check():
             400,
             choices=mode_algorithms,
         )
-    if not mode_algorithms and algorithm != "auto":
-        return _error(
-            f"Mode '{mode}' has no selectable algorithm.",
-            "invalid_algorithm",
-            400,
-            choices=["auto"],
-        )
 
     if not (0.0 < threshold < 1.0):
         return _error("threshold must be between 0 and 1.", "invalid_threshold", 400)
-
-    is_ai = mode in _AI_MODES
-
-    # Web comparison is on by default for the similarity modes (see
-    # websearch.py). If it's not configured on the server: an explicit
-    # `include_web=true` from the client is a hard error (the client asked
-    # for something the server can't do), but relying on the default just
-    # falls back to offline file-vs-file comparison — a scan shouldn't fail
-    # because nobody set an API key.
-    web_client = None
-    web_search_unavailable = False
-    if include_web and mode in WEB_ELIGIBLE_MODES:
-        api_key = os.environ.get("WEB_SEARCH_API_KEY", "")
-        engine_id = os.environ.get("WEB_SEARCH_ENGINE_ID", "")
-        if api_key and engine_id:
-            web_client = WebSearchClient(api_key=api_key, engine_id=engine_id)
-        elif include_web_explicit:
-            return _error(
-                "Web search is not configured on this server "
-                "(WEB_SEARCH_API_KEY / WEB_SEARCH_ENGINE_ID missing).",
-                "web_search_unavailable",
-                400,
-            )
-        else:
-            web_search_unavailable = True
-            include_web = False
-    else:
-        include_web = include_web and mode in WEB_ELIGIBLE_MODES
-
-    min_files = 1 if (is_ai or web_client is not None) else 2
 
     scan_uuid = str(uuid.uuid4())
     audit.log(
@@ -270,58 +217,28 @@ def api_check():
                     payload={"file": safe_name, "error": str(e)},
                 )
 
-    if len(file_data) < min_files:
+    # A single uploaded file is a valid scan (it just has no other file to
+    # be compared against, so its matrix/pairs come back empty).
+    if not file_data:
         return _error(
-            f"Need at least {min_files} valid file(s) for mode '{mode}'.",
+            f"Need at least 1 valid file for mode '{mode}'.",
             "insufficient_files",
             400,
             scan_id=scan_uuid,
             file_errors=errors,
         )
 
-    def _on_web_query(query: str, result_count: int) -> None:
-        audit.log(
-            "WEB_SEARCH_QUERY",
-            scan_uuid=scan_uuid,
-            payload={"query": query, "result_count": result_count},
-        )
-
     engine = ScanEngine(mode=mode, algorithm=algorithm)
-    result = engine.compute(
-        file_data,
-        preprocessor=preprocessor,
-        min_match_words=min_match_words,
-        web_client=web_client,
-        max_web_queries=WEB_SEARCH_MAX_QUERIES_PER_SCAN,
-        on_query=_on_web_query if web_client is not None else None,
-        web_budget_seconds=WEB_SEARCH_BUDGET_SECONDS,
-    )
+    result = engine.compute(file_data, preprocessor=preprocessor, min_match_words=min_match_words)
 
-    matrix_payload = None
-    pairs_payload = []
-    similarity_indices_payload = {}
-    source_breakdowns_payload = {}
-    web_matches_payload = {}
-    ai_scores = []
-
-    if is_ai:
-        ai_scores = [
-            {"file": name, **result.ai_assessments[name].to_dict()} for name in result.names
-        ]
-    else:
-        assert result.matrix is not None  # guaranteed for non-AI modes by ScanEngine.compute
-        matrix_payload = {
-            "names": result.matrix.names,
-            "scores": result.matrix.as_numpy().tolist(),
-        }
-        pairs_payload = [
-            {**p, "flagged": p["score"] >= threshold} for p in result.matrix.all_pairs()
-        ]
-        similarity_indices_payload = result.similarity_indices
-        source_breakdowns_payload = result.source_breakdowns
-        web_matches_payload = {
-            name: [m.to_dict() for m in matches] for name, matches in result.web_matches.items()
-        }
+    assert result.matrix is not None  # guaranteed by ScanEngine.compute
+    matrix_payload = {
+        "names": result.matrix.names,
+        "scores": result.matrix.as_numpy().tolist(),
+    }
+    pairs_payload = [
+        {**p, "flagged": p["score"] >= threshold} for p in result.matrix.all_pairs()
+    ]
 
     repository.save_scan(mode, threshold, files_meta, result, scan_uuid)
     _save_raw_texts(scan_uuid, file_data)
@@ -329,10 +246,7 @@ def api_check():
     audit.log(
         "SCAN_COMPLETE",
         scan_uuid=scan_uuid,
-        payload={
-            "flagged_count": sum(1 for p in pairs_payload if p["flagged"]),
-            "ai_scored_count": len(ai_scores),
-        },
+        payload={"flagged_count": sum(1 for p in pairs_payload if p["flagged"])},
     )
 
     return jsonify({
@@ -343,11 +257,8 @@ def api_check():
         "min_match_words": min_match_words,
         "matrix": matrix_payload,
         "pairs": pairs_payload,
-        "similarity_indices": similarity_indices_payload,
-        "source_breakdowns": source_breakdowns_payload,
-        "web_matches": web_matches_payload,
-        "web_search_unavailable": web_search_unavailable,
-        "ai_scores": ai_scores,
+        "similarity_indices": result.similarity_indices,
+        "source_breakdowns": result.source_breakdowns,
         "errors": errors,
     })
 
@@ -388,10 +299,6 @@ def api_report_heatmap(scan_uuid):
     record = repository.get_scan(scan_uuid)
     if record is None:
         return _error("Report not found.", "not_found", 404)
-    if record["algorithm"] in _AI_MODES:
-        return _error(
-            "Heatmaps aren't available for AI-detection scans.", "not_applicable", 400
-        )
 
     names = [f["file_name"] for f in record["files"]]
     matrix = ComparisonMatrix(names)

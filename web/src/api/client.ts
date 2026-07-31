@@ -36,7 +36,7 @@ export async function getStatus(): Promise<StatusResponse> {
 }
 
 /** Guess the language of a pasted code snippet, for the paste-box UI in
- * code_similarity/ai_code modes. */
+ * code_similarity mode. */
 export async function detectLanguage(text: string): Promise<DetectLanguageResponse> {
   const res = await fetch('/api/detect-language', {
     method: 'POST',
@@ -52,23 +52,19 @@ export interface CheckOptions {
   threshold: number
   algorithm?: Algorithm
   minMatchWords?: number
-  /** "Compare against the internet" (code_similarity/text_similarity only).
-   * Defaults to true server-side too — pass false explicitly to opt out. */
-  includeWeb?: boolean
   onProgress?: (fraction: number) => void
 }
 
 /** Upload files and run a scan. Uses XHR (not fetch) so upload progress can
  * be reported to the caller for the drop zone's progress bar. */
 export function runCheck(opts: CheckOptions): Promise<CheckResponse> {
-  const { files, mode, threshold, algorithm, minMatchWords, includeWeb, onProgress } = opts
+  const { files, mode, threshold, algorithm, minMatchWords, onProgress } = opts
 
   const form = new FormData()
   form.append('mode', mode)
   form.append('threshold', String(threshold))
   if (algorithm !== undefined) form.append('algorithm', algorithm)
   if (minMatchWords !== undefined) form.append('min_match_words', String(minMatchWords))
-  if (includeWeb !== undefined) form.append('include_web', String(includeWeb))
   for (const file of files) form.append('files', file, file.name)
 
   return new Promise((resolve, reject) => {

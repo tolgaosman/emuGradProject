@@ -1,5 +1,5 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/plagcheck/venv/Scripts/python.exe",
+  "python.defaultInterpreterPath": "plagcheck/venv/Scripts/python.exe",
   "python.analysis.extraPaths": [
     "${workspaceFolder}/plagcheck/src",
     "${workspaceFolder}/plagcheck",

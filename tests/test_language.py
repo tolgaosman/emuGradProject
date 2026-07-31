@@ -25,14 +25,11 @@ def test_language_for_extension_unknown_returns_none():
 def test_is_allowed_for_mode_text_modes_reject_code():
     assert is_allowed_for_mode(".txt", "text_similarity") is True
     assert is_allowed_for_mode(".py", "text_similarity") is False
-    assert is_allowed_for_mode(".txt", "ai_text") is True
-    assert is_allowed_for_mode(".java", "ai_text") is False
 
 
 def test_is_allowed_for_mode_code_modes_reject_text():
     assert is_allowed_for_mode(".py", "code_similarity") is True
     assert is_allowed_for_mode(".java", "code_similarity") is True
-    assert is_allowed_for_mode(".c", "ai_code") is True
     assert is_allowed_for_mode(".docx", "code_similarity") is False
 
 

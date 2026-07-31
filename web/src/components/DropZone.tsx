@@ -59,7 +59,7 @@ export function DropZone({ files, onFilesChange, disabled, mode }: DropZoneProps
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const isTextMode = mode === 'ai_text' || mode === 'text_similarity'
+  const isTextMode = mode === 'text_similarity'
   const supportedExtensions = isTextMode ? TEXT_EXTENSIONS : CODE_EXTENSIONS
   const extensionsDisplay = supportedExtensions.join(' · ')
 

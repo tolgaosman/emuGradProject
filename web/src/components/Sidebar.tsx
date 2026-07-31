@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getStatus } from '../api/client'
 import type { Mode } from '../api/types'
-import darkModeLogo from '../assets/darkModeLogo.png'
 import lightModeLogo from '../assets/lightModeLogo.png'
 
 interface SidebarEntry {
@@ -13,29 +12,21 @@ interface SidebarEntry {
 const GROUPS: { heading: string; entries: SidebarEntry[] }[] = [
   {
     heading: 'Text',
-    entries: [
-      { mode: 'text_similarity', label: 'Similarity Check', icon: '📖' },
-      { mode: 'ai_text', label: 'AI Check', icon: '✦' },
-    ],
+    entries: [{ mode: 'text_similarity', label: 'Similarity Check', icon: '📖' }],
   },
   {
     heading: 'Code',
-    entries: [
-      { mode: 'code_similarity', label: 'Similarity Check', icon: '⧉' },
-      { mode: 'ai_code', label: 'AI Check', icon: '⌘' },
-    ],
+    entries: [{ mode: 'code_similarity', label: 'Similarity Check', icon: '⧉' }],
   },
 ]
 
 interface SidebarProps {
   mode: Mode
   onModeChange: (mode: Mode) => void
-  theme: 'light' | 'dark'
-  onToggleTheme: () => void
   disabled?: boolean
 }
 
-export function Sidebar({ mode, onModeChange, theme, onToggleTheme, disabled }: SidebarProps) {
+export function Sidebar({ mode, onModeChange, disabled }: SidebarProps) {
   const [apiOnline, setApiOnline] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -56,7 +47,7 @@ export function Sidebar({ mode, onModeChange, theme, onToggleTheme, disabled }: 
     <aside className="sidebar">
       <div className="sidebar-brand">
         <img
-          src={theme === 'dark' ? darkModeLogo : lightModeLogo}
+          src={lightModeLogo}
           alt="PlagCheck"
           className="sidebar-logo"
         />
@@ -88,14 +79,6 @@ export function Sidebar({ mode, onModeChange, theme, onToggleTheme, disabled }: 
       </nav>
 
       <div className="sidebar-footer">
-        <button
-          type="button"
-          className="sidebar-theme-toggle"
-          onClick={onToggleTheme}
-          aria-label="Toggle theme"
-        >
-          {theme === 'light' ? '🌙' : '☀️'}
-        </button>
         <span className={`sidebar-status${apiOnline === false ? ' sidebar-status-offline' : ''}`}>
           <span className="sidebar-status-dot" aria-hidden="true" />
           {apiOnline === false ? 'API offline' : apiOnline === null ? 'Checking…' : 'System Ready'}

@@ -1,11 +1,10 @@
 """ repository.py — ScanRepository: persists scans across the 3NF schema.
 
-Writes scan_request -> scan_file -> scan_algorithm -> scan_pair (similarity
-modes) or -> scan_ai_result (AI modes) in one transaction. When PostgreSQL is
-unreachable, falls back to a JSON file per scan under `output/scans/`,
-mirroring the offline fallback pattern in `audit.py`. `get_scan` reads
-DB-first, then the JSON fallback, so a report stays retrievable across
-process restarts either way.
+Writes scan_request -> scan_file -> scan_algorithm -> scan_pair in one
+transaction. When PostgreSQL is unreachable, falls back to a JSON file per
+scan under `output/scans/`, mirroring the offline fallback pattern in
+`audit.py`. `get_scan` reads DB-first, then the JSON fallback, so a report
+stays retrievable across process restarts either way.
 """
 import json
 import logging
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class ScanRepository:
-    """Persists and retrieves scan results across the six-table schema."""
+    """Persists and retrieves scan results across the relational schema."""
 
     def __init__(self, json_dir: str = _JSON_DIR):
         """Read DB connection parameters from the environment."""
@@ -111,28 +110,14 @@ class ScanRepository:
         files_meta: list[dict],
         result: ScanResult,
     ) -> dict:
-        if result.is_ai:
-            pairs: list[dict] = []
-            files = list(files_meta)
-            ai_results = [
-                {"file": name, **result.ai_assessments[name].to_dict()}
-                for name in result.names
-                if name in result.ai_assessments
-            ]
-        else:
-            pairs = [
-                {**pair, "flagged": pair["score"] >= threshold}
-                for pair in (result.matrix.all_pairs() if result.matrix else [])
-            ]
-            files = [
-                {**f, "similarity_index": result.similarity_indices.get(f["file_name"])}
-                for f in files_meta
-            ]
-            ai_results = []
-
-        web_matches = {
-            name: [m.to_dict() for m in matches] for name, matches in result.web_matches.items()
-        }
+        pairs = [
+            {**pair, "flagged": pair["score"] >= threshold}
+            for pair in (result.matrix.all_pairs() if result.matrix else [])
+        ]
+        files = [
+            {**f, "similarity_index": result.similarity_indices.get(f["file_name"])}
+            for f in files_meta
+        ]
 
         return {
             "scan_uuid": scan_uuid,
@@ -143,9 +128,7 @@ class ScanRepository:
             "timestamp": datetime.now().isoformat(),
             "files": files,
             "pairs": pairs,
-            "ai_scores": ai_results,
             "source_breakdowns": result.source_breakdowns,
-            "web_matches": web_matches,
         }
 
     # -- PostgreSQL ------------------------------------------------------------
@@ -216,35 +199,6 @@ class ScanRepository:
                     (scan_id, id_a, id_b, pair["score"], pair["flagged"]),
                 )
 
-            for ai_result in record["ai_scores"]:
-                file_id = file_ids.get(ai_result["file"])
-                if file_id is None:
-                    continue
-                cur.execute(
-                    "INSERT INTO scan_ai_result (scan_id, file_id, probability, band) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (scan_id, file_id, ai_result["overall_probability"], ai_result["band"]),
-                )
-
-            for file_name, matches in record.get("web_matches", {}).items():
-                file_id = file_ids.get(file_name)
-                if file_id is None:
-                    continue
-                for match in matches:
-                    cur.execute(
-                        "INSERT INTO scan_web_match "
-                        "(scan_id, file_id, query, url, title, score) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
-                        (
-                            scan_id,
-                            file_id,
-                            match["query"],
-                            match["url"],
-                            match["title"],
-                            match["score"],
-                        ),
-                    )
-
     def _load_db(self, conn, scan_uuid: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute(
@@ -301,33 +255,6 @@ class ScanRepository:
                 for id_a, id_b, score, flagged in cur.fetchall()
             ]
 
-            cur.execute(
-                "SELECT file_id, probability, band FROM scan_ai_result WHERE scan_id = %s",
-                (scan_id,),
-            )
-            ai_scores = [
-                {
-                    "file": files[file_id]["file_name"],
-                    "overall_probability": float(prob),
-                    "band": band,
-                }
-                for file_id, prob, band in cur.fetchall()
-                if file_id in files
-            ]
-
-            cur.execute(
-                "SELECT file_id, query, url, title, score FROM scan_web_match "
-                "WHERE scan_id = %s",
-                (scan_id,),
-            )
-            web_matches: dict[str, list[dict]] = {}
-            for file_id, query, url, title, score in cur.fetchall():
-                if file_id not in files:
-                    continue
-                web_matches.setdefault(files[file_id]["file_name"], []).append(
-                    {"query": query, "url": url, "title": title, "score": float(score)}
-                )
-
         return {
             "scan_uuid": scan_uuid,
             "algorithm": algorithm,
@@ -337,12 +264,10 @@ class ScanRepository:
             "timestamp": timestamp.isoformat(),
             "files": list(files.values()),
             "pairs": pairs,
-            "ai_scores": ai_scores,
             # Ranked per-source contributions aren't persisted relationally
-            # (see the docstring on scan_ai_result) — only available for
-            # scans that are still in the JSON fallback / same-process cache.
+            # — only available for scans that are still in the JSON
+            # fallback / same-process cache.
             "source_breakdowns": {},
-            "web_matches": web_matches,
         }
 
     # -- JSON fallback -----------------------------------------------------

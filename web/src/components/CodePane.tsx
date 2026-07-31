@@ -18,8 +18,7 @@ interface Line {
 
 /** Split `text` into lines, marking the characters covered by `spans` and
  * flagging any line touched by at least one span (the mockup's `+` gutter
- * marker). Shared by the pairwise comparison view and the AI segment
- * viewer so both render identically. */
+ * marker). */
 function toLines(text: string, spans: CodePaneSpan[]): Line[] {
   const sorted = [...spans].sort((a, b) => a.start - b.start)
   const rawLines = text.split('\n')
@@ -67,8 +66,8 @@ interface CodePaneProps {
   onScroll?: () => void
 }
 
-/** Line-numbered, span-highlighted source viewer — the gutter used by both
- * the inline pairwise comparison card and the AI segment-highlight card. */
+/** Line-numbered, span-highlighted source viewer used by the inline
+ * pairwise comparison card. */
 export function CodePane({ text, spans, paneRef, onScroll }: CodePaneProps) {
   const lines = toLines(text, spans)
 

@@ -69,31 +69,6 @@ def test_cli_end_to_end_code_similarity(tmp_path):
     assert (out_dir / "similarity_heatmap.png").is_file()
 
 
-def test_cli_end_to_end_ai_text_single_file(tmp_path):
-    """AI modes accept a single file and write ai_report.json instead of
-    the pairwise-comparison artifacts."""
-    out_dir = tmp_path / "cli_ai_output"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "plagcheck.py",
-            "--files",
-            str(SAMPLES_DIR / "sample_a.txt"),
-            "--mode",
-            "ai_text",
-            "--output",
-            str(out_dir),
-        ],
-        cwd=str(PLAGCHECK_DIR),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "AI detection results" in result.stdout
-    assert (out_dir / "ai_report.json").is_file()
-
-
 def test_cli_legacy_algorithm_alias_maps_to_mode(tmp_path):
     """--algorithm ast is documented in the graduation report; it must keep
     working, mapped onto code_similarity."""

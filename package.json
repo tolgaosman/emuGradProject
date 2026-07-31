@@ -1,0 +1,10 @@
+{
+  "name": "emugradproject",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix web run dev",
+    "api": "plagcheck\\venv\\Scripts\\python.exe plagcheck/app.py",
+    "build": "npm --prefix web run build",
+    "lint": "npm --prefix web run lint"
+  }
+}

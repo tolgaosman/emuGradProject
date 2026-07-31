@@ -1,13 +1,14 @@
--- Plagiarism Detection System | PostgreSQL Schema v2.1.0
+-- Plagiarism Detection System | PostgreSQL Schema v2.2.0
 -- Run: psql -U plagcheck_user plagcheck_db < db/schema.sql
 --
--- Safe to re-run against an existing v1 database: every CREATE TABLE is
--- IF NOT EXISTS, and the v2 additions (mode/language support, the AI-result
--- table, per-file similarity index, internet-source matches) use named
--- constraints that are dropped and re-added idempotently below, so this
--- file both creates a fresh schema and upgrades an older one in place.
+-- Safe to re-run against an existing database: every CREATE TABLE is
+-- IF NOT EXISTS, and constraints are dropped and re-added idempotently
+-- below, so this file both creates a fresh schema and upgrades an older
+-- one in place. v2.2 removes the AI-detection and internet-source-match
+-- tables/modes from v2.1 — the project is local-execution, file-vs-file
+-- similarity only; that pass was reverted.
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto; 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS app_user (
  user_id SERIAL PRIMARY KEY,
@@ -15,7 +16,7 @@ CREATE TABLE IF NOT EXISTS app_user (
  user_email VARCHAR(150) NOT NULL UNIQUE,
  user_role VARCHAR(20) NOT NULL CHECK (user_role IN ('student','professor','admin')),
  created_at TIMESTAMP NOT NULL DEFAULT NOW()
-); 
+);
 
 CREATE INDEX IF NOT EXISTS idx_user_email ON app_user (user_email);
 
@@ -48,7 +49,7 @@ CREATE TABLE IF NOT EXISTS scan_file (
  file_format VARCHAR(10) NOT NULL,
  -- Turnitin-style per-document "% of this file matched something else" in
  -- the batch. Asymmetric (unlike scan_pair.similarity_score), so it lives
- -- on the file, not the pair. NULL for AI-mode scans, where it doesn't apply.
+ -- on the file, not the pair.
  similarity_index FLOAT
 );
 
@@ -72,7 +73,7 @@ CREATE TABLE IF NOT EXISTS scan_pair (
  similarity_score FLOAT NOT NULL CHECK (similarity_score >= 0 AND similarity_score <= 1),
  flagged BOOLEAN NOT NULL DEFAULT FALSE,
  CONSTRAINT chk_pair_order CHECK (file_id_a < file_id_b)
-); 
+);
 
 CREATE INDEX IF NOT EXISTS idx_pair_scan ON scan_pair (scan_id);
 CREATE INDEX IF NOT EXISTS idx_pair_flagged ON scan_pair (flagged) WHERE flagged = TRUE;
@@ -80,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_pair_flagged ON scan_pair (flagged) WHERE flagged
 CREATE TABLE IF NOT EXISTS scan_algorithm (
  scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
  -- Historically named for the 4 selectable algorithms; now also stores the
- -- 4 user-facing modes, each of which composes 1-2 of those algorithms
+ -- 2 user-facing modes, each of which composes 1-2 of those algorithms
  -- internally (see engine.py's _CODE_*_WEIGHT / _TEXT_*_WEIGHT constants).
  -- Both vocabularies are kept so pre-v2 scan history stays valid.
  algorithm_name VARCHAR(50) NOT NULL,
@@ -91,43 +92,14 @@ ALTER TABLE scan_algorithm DROP CONSTRAINT IF EXISTS chk_algorithm_name;
 ALTER TABLE scan_algorithm ADD CONSTRAINT chk_algorithm_name CHECK (
  algorithm_name IN (
    'cosine','winnowing','jaccard','ast','all','auto',
-   'code_similarity','text_similarity','ai_code','ai_text'
+   'code_similarity','text_similarity'
  )
 );
 
--- One row per file per AI-mode scan (ai_code / ai_text). Only the headline
--- probability + band are persisted relationally; the per-signal breakdown
--- and sentence/block-level segments are richer analysis data that, like raw
--- file text, live in the JSON sidecar / API response rather than the
--- normalized schema.
-CREATE TABLE IF NOT EXISTS scan_ai_result (
- result_id SERIAL PRIMARY KEY,
- scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
- file_id INTEGER NOT NULL REFERENCES scan_file(file_id) ON DELETE CASCADE,
- probability FLOAT NOT NULL CHECK (probability >= 0 AND probability <= 1),
- band VARCHAR(10) NOT NULL CHECK (band IN ('low','possible','likely')),
- UNIQUE (scan_id, file_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_result_scan ON scan_ai_result (scan_id);
-
--- One row per fetched web page compared against an uploaded file, for the
--- code_similarity/text_similarity modes' "compare against the internet"
--- feature (see websearch.py). Scoped strictly to files whose mode is
--- web-eligible; empty for AI-mode scans and for any scan where web search
--- was unavailable/disabled.
-CREATE TABLE IF NOT EXISTS scan_web_match (
- web_match_id SERIAL PRIMARY KEY,
- scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
- file_id INTEGER NOT NULL REFERENCES scan_file(file_id) ON DELETE CASCADE,
- query TEXT NOT NULL,
- url TEXT NOT NULL,
- title TEXT,
- score FLOAT NOT NULL CHECK (score >= 0 AND score <= 1)
-);
-
-CREATE INDEX IF NOT EXISTS idx_web_match_scan ON scan_web_match (scan_id);
-CREATE INDEX IF NOT EXISTS idx_web_match_file ON scan_web_match (file_id);
+-- v2.1 added AI-detection and internet-source-match tables; both were
+-- reverted (the project stays local-execution, file-vs-file only).
+DROP TABLE IF EXISTS scan_ai_result;
+DROP TABLE IF EXISTS scan_web_match;
 
 CREATE TABLE IF NOT EXISTS audit_log (
  log_id SERIAL PRIMARY KEY,
@@ -142,9 +114,9 @@ ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_event_type_check;
 ALTER TABLE audit_log ADD CONSTRAINT audit_log_event_type_check CHECK (
  event_type IN (
    'SCAN_START','SCAN_COMPLETE','SCAN_ERROR','FILE_REJECTED',
-   'API_REQUEST','API_ERROR','WEB_SEARCH_QUERY'
+   'API_REQUEST','API_ERROR'
  )
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_scan ON audit_log (scan_id); 
+CREATE INDEX IF NOT EXISTS idx_audit_scan ON audit_log (scan_id);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (event_timestamp DESC);
