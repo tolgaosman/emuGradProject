@@ -90,6 +90,31 @@ def strip_comments_and_strings(text: str, language: str) -> str:
     return out
 
 
+def blank_comments_and_strings(text: str, language: str) -> str:
+    """Like `strip_comments_and_strings`, but preserves character offsets.
+
+    Removed regions are overwritten with spaces (newlines kept) instead of
+    deleted, so the result is the same length as `text` and indexes into it
+    still line up. `reporter.py` needs this to exclude comment/string content
+    from matched spans while still reporting offsets into the original
+    source — deleting the text would shift every offset after it.
+    """
+    line_cm, block_start, block_end = COMMENT_SYNTAX.get(language, (None, None, None))
+
+    def blank(match: re.Match) -> str:
+        return re.sub(r"[^\n]", " ", match.group())
+
+    out = re.sub(r'"(?:\\.|[^"\\])*"', blank, text)
+    out = re.sub(r"'(?:\\.|[^'\\])*'", blank, out)
+
+    if block_start and block_end:
+        out = re.sub(re.escape(block_start) + r".*?" + re.escape(block_end), blank, out, flags=re.S)
+    if line_cm:
+        out = re.sub(re.escape(line_cm) + r".*", blank, out)
+
+    return out
+
+
 # --------------------------------------------------------------------------
 # Language detection for the paste box (heuristic keyword/syntax scoring).
 # --------------------------------------------------------------------------

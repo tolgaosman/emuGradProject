@@ -21,9 +21,8 @@ interface ScanSettingsProps {
   disabled?: boolean
 }
 
-/** The mockup's ALGORITHM + THRESHOLD card. Chips are an advanced override
- * on top of the mode's designed blend ("All Blended" / auto) — omitted
- * entirely for AI modes, where none of this has meaning. */
+/** The ALGORITHM + THRESHOLD card. Chips are an advanced override on top of
+ * the mode's designed blend ("All Blended" / auto). */
 export function ScanSettings({
   mode,
   algorithm,
@@ -71,7 +70,7 @@ export function ScanSettings({
       <div className="settings-slider">
         <label htmlFor="threshold-slider">
           <span>Threshold</span>
-          <span className="settings-slider-value">{threshold.toFixed(2)}</span>
+          <span className="settings-slider-value">{Math.round(threshold * 100)}%</span>
         </label>
         <input
           id="threshold-slider"

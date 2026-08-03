@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { Algorithm, Mode } from './api/types'
 import { ComparisonInspector } from './components/ComparisonInspector'
 import { DropZone } from './components/DropZone'
 import { EmptyState } from './components/EmptyState'
 import { HeatmapGrid } from './components/HeatmapGrid'
 import { ScanSettings } from './components/ScanSettings'
-import { Sidebar } from './components/Sidebar'
-import { SimilarityIndexPanel } from './components/SimilarityIndexPanel'
+import { SimilarityReport } from './components/SimilarityReport'
 import { SkeletonLoader } from './components/SkeletonLoader'
+import { TopBar } from './components/TopBar'
 import { useScan } from './hooks/useScan'
+import { useTheme } from './hooks/useTheme'
 import './styles/app.css'
 
 interface SelectedPair {
@@ -17,18 +18,31 @@ interface SelectedPair {
   score: number
 }
 
-const MODE_TITLES: Record<Mode, string> = {
-  text_similarity: 'Text Similarity Check',
-  code_similarity: 'Code Similarity Check',
-}
-
-const MODE_TAGLINES: Record<Mode, string> = {
-  text_similarity: 'Compare prose documents for overlapping or copied passages.',
-  code_similarity: 'Compare source files for structural and copy-paste similarity.',
+function RefreshIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M20 11A8 8 0 1 0 18.5 16"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path
+        d="M20 5v6h-6"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  )
 }
 
 function App() {
-  const [files, setFiles] = useState<File[]>([])
+  const [referenceFile, setReferenceFile] = useState<File | null>(null)
+  const [candidateFiles, setCandidateFiles] = useState<File[]>([])
   const [mode, setMode] = useState<Mode>('text_similarity')
   const [algorithm, setAlgorithm] = useState<Algorithm>('auto')
   const [threshold, setThreshold] = useState(0.7)
@@ -36,137 +50,191 @@ function App() {
   const [selectedPair, setSelectedPair] = useState<SelectedPair | null>(null)
 
   const { state, start, reset } = useScan()
+  const { theme, toggleTheme } = useTheme()
 
   const isBusy = state.status === 'uploading' || state.status === 'processing'
-  // A single file is always accepted (it just has no pairs), but a scan is
-  // only useful with at least one uploaded file.
-  const canScan = files.length >= 1 && !isBusy
+  // A scan needs exactly one reference file plus at least one candidate to
+  // check against it.
+  const canScan = referenceFile !== null && candidateFiles.length >= 1 && !isBusy
 
   const handleModeChange = (next: Mode) => {
     setMode(next)
     setAlgorithm('auto')
-    setFiles([])
+    setReferenceFile(null)
+    setCandidateFiles([])
     setSelectedPair(null)
     reset()
   }
 
   const handleScan = () => {
-    if (!canScan) return
+    if (!referenceFile || !canScan) return
     setSelectedPair(null)
-    start({ files, mode, threshold, algorithm, minMatchWords })
+    start({ files: [referenceFile, ...candidateFiles], mode, threshold, algorithm, minMatchWords })
   }
 
   const handleReset = () => {
-    setFiles([])
+    setReferenceFile(null)
+    setCandidateFiles([])
     setSelectedPair(null)
     reset()
   }
 
   return (
     <div className="app-shell">
-      <Sidebar
+      <TopBar
         mode={mode}
         onModeChange={handleModeChange}
         disabled={isBusy}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
-      <div className="content">
-        <header className="content-head">
-          <div>
-            <h1>{MODE_TITLES[mode]}</h1>
-            <p className="app-tagline">{MODE_TAGLINES[mode]}</p>
+      <main className="content-columns">
+        <div className="content-column-left">
+          <ScanSettings
+            mode={mode}
+            algorithm={algorithm}
+            onAlgorithmChange={setAlgorithm}
+            threshold={threshold}
+            onThresholdChange={setThreshold}
+            minMatchWords={minMatchWords}
+            onMinMatchWordsChange={setMinMatchWords}
+            disabled={isBusy}
+          />
+
+          <DropZone
+            title="Reference file"
+            maxFiles={1}
+            files={referenceFile ? [referenceFile] : []}
+            onFilesChange={(next) => setReferenceFile(next[0] ?? null)}
+            disabled={isBusy}
+            mode={mode}
+          />
+
+          <DropZone
+            title="Files to check"
+            files={candidateFiles}
+            onFilesChange={setCandidateFiles}
+            disabled={isBusy}
+            mode={mode}
+          />
+
+          <div className="run-bar">
+            {state.status === 'ready' ? (
+              <button type="button" className="btn btn-secondary btn-block" onClick={handleReset}>
+                New scan
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary btn-block"
+                disabled={!canScan}
+                onClick={handleScan}
+              >
+                {isBusy ? 'Scanning…' : '▶ Run Scan'}
+              </button>
+            )}
+
+            {state.status === 'uploading' && (
+              <div
+                className="upload-progress"
+                role="progressbar"
+                aria-valuenow={Math.round(state.progress * 100)}
+              >
+                <div className="upload-progress-bar" style={{ width: `${state.progress * 100}%` }} />
+                <span>Uploading… {Math.round(state.progress * 100)}%</span>
+              </div>
+            )}
+
+            {state.status === 'error' && (
+              <div className="error-banner" role="alert">
+                <strong>Scan failed.</strong> {state.message}
+              </div>
+            )}
           </div>
-          {state.status === 'ready' ? (
-            <button type="button" className="btn btn-secondary" onClick={handleReset}>
-              New scan
-            </button>
-          ) : (
-            <button type="button" className="btn btn-primary" disabled={!canScan} onClick={handleScan}>
-              {isBusy ? 'Scanning…' : '▶ Run Scan'}
-            </button>
+        </div>
+
+        <div className="content-column-right">
+          {state.status === 'processing' && (
+            <SkeletonLoader label="Computing results…" sublabel={`Mode: ${mode}`} />
           )}
-        </header>
 
-        {state.status === 'uploading' && (
-          <div className="upload-progress" role="progressbar" aria-valuenow={Math.round(state.progress * 100)}>
-            <div className="upload-progress-bar" style={{ width: `${state.progress * 100}%` }} />
-            <span>Uploading… {Math.round(state.progress * 100)}%</span>
-          </div>
-        )}
+          {(state.status === 'idle' || state.status === 'uploading' || state.status === 'error') && (
+            <EmptyState title="No results yet" description="Run a scan to see the similarity matrix." />
+          )}
 
-        {state.status === 'processing' && (
-          <SkeletonLoader label="Computing results…" sublabel={`Mode: ${mode}`} />
-        )}
+          {state.status === 'ready' && (
+            <>
+              {state.result.errors.length > 0 && (
+                <ul className="dropzone-rejections">
+                  {state.result.errors.map((e) => (
+                    <li key={e.file}>
+                      <strong>{e.file}</strong> — {e.error}
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-        {state.status === 'error' && (
-          <div className="error-banner" role="alert">
-            <strong>Scan failed.</strong> {state.message}
-          </div>
-        )}
+              {(() => {
+                const matrix = state.result.matrix
+                const refName = referenceFile?.name
+                const refIdx = matrix && refName ? matrix.names.indexOf(refName) : -1
 
-        <div className="content-columns">
-          <div className="content-column-left">
-            <ScanSettings
-              mode={mode}
-              algorithm={algorithm}
-              onAlgorithmChange={setAlgorithm}
-              threshold={threshold}
-              onThresholdChange={setThreshold}
-              minMatchWords={minMatchWords}
-              onMinMatchWordsChange={setMinMatchWords}
-              disabled={isBusy}
-            />
-            <DropZone files={files} onFilesChange={setFiles} disabled={isBusy} mode={mode} />
+                if (!matrix?.names.length || refIdx === -1) {
+                  return (
+                    <EmptyState title="No comparable files" description="Every uploaded file was rejected." />
+                  )
+                }
 
-            {files.length === 0 && state.status === 'idle' && (
-              <EmptyState
-                icon="⇪"
-                title="No files yet"
-                description="Add 1–50 supported files to check."
-              />
-            )}
-          </div>
+                const candidateNames = matrix.names.filter((_, i) => i !== refIdx)
+                const candidateScores = matrix.names
+                  .map((_, i) => i)
+                  .filter((i) => i !== refIdx)
+                  .map((i) => matrix.scores[refIdx]?.[i] ?? 0)
+                const flaggedCount = state.result.pairs.filter(
+                  (p) => p.flagged && (p.file_a === refName || p.file_b === refName),
+                ).length
 
-          <div className="content-column-right">
-            {state.status !== 'ready' && (
-              <EmptyState title="No results yet" description="Run a scan to see the similarity matrix." />
-            )}
-
-            {state.status === 'ready' && (
-              <>
-                {state.result.errors.length > 0 && (
-                  <ul className="dropzone-rejections">
-                    {state.result.errors.map((e) => (
-                      <li key={e.file}>
-                        <strong>{e.file}</strong> — {e.error}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {state.result.matrix?.names.length ? (
+                return (
                   <>
-                    <SimilarityIndexPanel
-                      similarityIndices={state.result.similarity_indices}
-                      sourceBreakdowns={state.result.source_breakdowns}
-                      onSourceClick={(fileA, fileB, score) => setSelectedPair({ fileA, fileB, score })}
-                    />
-
                     <div className="card">
                       <div className="card-head">
                         <span className="card-title">Similarity Matrix</span>
-                        <span className="card-flagged-badge">
-                          <span className="card-flagged-dot" aria-hidden="true" />
-                          {state.result.pairs.filter((p) => p.flagged).length} flagged
-                        </span>
+                        <div className="card-head-actions">
+                          <span className="card-flagged-badge">
+                            <span className="card-flagged-dot" aria-hidden="true" />
+                            {flaggedCount} flagged
+                          </span>
+                          <button
+                            type="button"
+                            className={`icon-btn${isBusy ? ' icon-btn-spinning' : ''}`}
+                            title="Re-run with current settings (threshold, algorithm, min match words) without re-uploading"
+                            aria-label="Re-run scan"
+                            disabled={!canScan}
+                            onClick={handleScan}
+                          >
+                            <RefreshIcon />
+                          </button>
+                        </div>
                       </div>
                       <HeatmapGrid
-                        names={state.result.matrix.names}
-                        scores={state.result.matrix.scores}
+                        referenceName={matrix.names[refIdx]}
+                        candidateNames={candidateNames}
+                        scores={candidateScores}
                         threshold={state.result.threshold}
-                        onCellClick={(fileA, fileB, score) => setSelectedPair({ fileA, fileB, score })}
+                        onCellClick={(fileB, score) =>
+                          setSelectedPair({ fileA: matrix.names[refIdx], fileB, score })
+                        }
                       />
                     </div>
+
+                    <SimilarityReport
+                      referenceName={matrix.names[refIdx]}
+                      names={matrix.names}
+                      scores={matrix.scores}
+                      threshold={state.result.threshold}
+                      onSelectPair={(fileA, fileB, score) => setSelectedPair({ fileA, fileB, score })}
+                    />
 
                     {selectedPair && (
                       <ComparisonInspector
@@ -178,14 +246,12 @@ function App() {
                       />
                     )}
                   </>
-                ) : (
-                  <EmptyState title="No comparable files" description="Every uploaded file was rejected." />
-                )}
-              </>
-            )}
-          </div>
+                )
+              })()}
+            </>
+          )}
         </div>
-      </div>
+      </main>
     </div>
   )
 }

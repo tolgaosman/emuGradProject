@@ -1,24 +1,26 @@
 """ plagcheck.py — CLI entry point. """
 import argparse
 import os
+import sys
 import uuid
 
 from dotenv import load_dotenv
 from src.audit import AuditLogger
-from src.engine import ScanEngine
+from src.engine import ALGORITHMS_BY_MODE, ScanEngine
 from src.language import MODES, language_for_extension
 from src.loader import MAX_FILES, FileLoader
 from src.preprocessor import Preprocessor
 from src.reporter import ReportGenerator
 from src.repository import ScanRepository
+from src.similarity_index import DEFAULT_MIN_MATCH_WORDS
 
 load_dotenv()
 
-#: `--algorithm` is a legacy alias, documented in the graduation report
-#: alongside `--mode`. It maps onto the mode whose composition includes that
-#: algorithm most directly (AST only makes sense for code; the rest default
-#: to text) — see `engine.py`'s `_CODE_*_WEIGHT` / `_TEXT_*_WEIGHT` for what
-#: each mode actually composes.
+#: `--algorithm` is documented in the graduation report alongside `--mode`.
+#: Each value both selects the mode it belongs to (AST only makes sense for
+#: code; the rest default to text) *and* forces that single model, matching
+#: the API's `algorithm` parameter. `all` is a legacy spelling of "the mode's
+#: default", i.e. `auto`.
 _ALGORITHM_TO_MODE = {
     "ast": "code_similarity",
     "winnowing": "text_similarity",
@@ -34,9 +36,27 @@ def _resolve_mode(args) -> str:
         return args.mode
     if args.algorithm:
         mode = _ALGORITHM_TO_MODE[args.algorithm]
-        print(f"Note: --algorithm is a legacy alias; '{args.algorithm}' maps to mode '{mode}'.")
+        print(f"Note: --algorithm also selects mode '{mode}'.")
         return mode
     return os.environ.get("DEFAULT_MODE", "text_similarity")
+
+
+def _resolve_algorithm(args, mode: str) -> str:
+    """Resolve which single algorithm to force, or 'auto' for the default.
+
+    Silently degrades to `auto` when the requested algorithm isn't valid for
+    the resolved mode (e.g. `--mode text_similarity --algorithm ast`), rather
+    than running AST on prose and reporting a misleading 0.0.
+    """
+    if not args.algorithm or args.algorithm == "all":
+        return "auto"
+    if args.algorithm not in ALGORITHMS_BY_MODE.get(mode, []):
+        print(
+            f"Note: algorithm '{args.algorithm}' is not available for mode "
+            f"'{mode}'; using the mode default instead."
+        )
+        return "auto"
+    return args.algorithm
 
 
 def main():
@@ -53,7 +73,7 @@ def main():
         "--algorithm",
         choices=sorted(_ALGORITHM_TO_MODE),
         default=None,
-        help="Legacy alias for --mode (see docs); ignored if --mode is also given",
+        help="Force a single algorithm (and, unless --mode is given, its mode)",
     )
     parser.add_argument(
         "--threshold",
@@ -73,17 +93,27 @@ def main():
         default=None,
         help="Path to an academic exclusion list (default: config/exclusions.txt)",
     )
+    parser.add_argument(
+        "--min-match-words",
+        type=int,
+        default=DEFAULT_MIN_MATCH_WORDS,
+        help=(
+            "Ignore matches shorter than this many words "
+            f"(default: {DEFAULT_MIN_MATCH_WORDS}, 0 disables)"
+        ),
+    )
 
     args = parser.parse_args()
     mode = _resolve_mode(args)
+    algorithm = _resolve_algorithm(args, mode)
 
     if not (0.01 <= args.threshold <= 0.99):
         print("Error: Threshold must be between 0.01 and 0.99")
-        return
+        return 1
 
     if len(args.files) > MAX_FILES:
         print(f"Error: Batch of {len(args.files)} exceeds max of {MAX_FILES} files.")
-        return
+        return 1
 
     scan_uuid = str(uuid.uuid4())
     audit = AuditLogger()
@@ -93,6 +123,7 @@ def main():
     preprocessor = Preprocessor(exclusions_path=args.exclusions)
     file_data = {}
     files_meta = []
+    name_counts: dict[str, int] = {}
 
     print(f"Loading {len(args.files)} files for mode '{mode}'...")
     for raw_path in args.files:
@@ -106,7 +137,20 @@ def main():
             ext = os.path.splitext(path)[1].lower()
             language = language_for_extension(ext) or "text"
             tokens, kgrams = preprocessor.process(raw_text, language=language)
-            name = os.path.basename(path)
+
+            # Two paths can share a basename (`old/report.txt`,
+            # `new/report.txt`); without this they'd overwrite each other in
+            # file_data and silently collapse the batch. Mirrors the same
+            # disambiguation `app.py` does for duplicate uploads.
+            base = os.path.basename(path)
+            occurrence = name_counts.get(base, 0)
+            name_counts[base] = occurrence + 1
+            if occurrence:
+                stem, dupe_ext = os.path.splitext(base)
+                name = f"{stem} ({occurrence + 1}){dupe_ext}"
+            else:
+                name = base
+
             file_data[name] = {
                 "raw": raw_text,
                 "tokens": tokens,
@@ -126,11 +170,13 @@ def main():
     # list, and no similarity index contributors).
     if not file_data:
         print(f"Error: Need at least 1 valid file for mode '{mode}'.")
-        return
+        return 1
 
-    print(f"Running '{mode}'...")
-    engine = ScanEngine(mode=mode)
-    result = engine.compute(file_data, preprocessor=preprocessor)
+    print(f"Running '{mode}' (algorithm: {algorithm})...")
+    engine = ScanEngine(mode=mode, algorithm=algorithm)
+    result = engine.compute(
+        file_data, preprocessor=preprocessor, min_match_words=args.min_match_words
+    )
 
     ScanRepository().save_scan(mode, args.threshold, files_meta, result, scan_uuid)
 
@@ -144,6 +190,8 @@ def main():
         threshold=args.threshold,
         file_data=file_data,
         preprocessor=preprocessor,
+        min_match_words=args.min_match_words,
+        formats=args.format,
     )
     flagged = result.matrix.get_flagged(args.threshold)
     flagged_count = len(flagged)
@@ -156,14 +204,16 @@ def main():
             print(f"  {f['file_a']} <-> {f['file_b']} : {f['score']:.4f}")
 
     print(f"\nArtifacts generated in '{args.output}':")
-    if args.format in ["csv", "both"]:
-        print(f"  - {artifacts['csv']}")
-    if args.format in ["html", "both"]:
-        print(f"  - {artifacts['html']}")
-    print(f"  - {artifacts['heatmap']}")
+    for key in ("csv", "html", "heatmap"):
+        if key in artifacts:
+            print(f"  - {artifacts[key]}")
 
     audit.log("SCAN_COMPLETE", scan_uuid=scan_uuid, payload={"flagged_count": flagged_count})
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # Propagate the exit code so a caller/script can tell a failed scan from
+    # a successful one — main() previously always exited 0, even after
+    # printing "Error: ...".
+    sys.exit(main())

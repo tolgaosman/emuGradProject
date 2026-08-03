@@ -48,20 +48,40 @@ def test_code_similarity_on_non_python_pair():
     assert result.matrix.get(i, j) == pytest.approx(1.0)  # winnowing fallback on identical text
 
 
-def test_code_similarity_python_pair_uses_ast():
-    """Both files Python -> AST + winnowing blend, not the winnowing-only fallback."""
-    code = "def add(a, b):\n    return a + b\n"
+def test_code_similarity_auto_ignores_ast_even_for_python_pairs():
+    """auto no longer blends AST into a Python pair's score — AST is
+    rename-invariant (scores a pure rename as 1.0), but that similarity has
+    no matched span to show in the comparison view, so it must not lift auto
+    above what winnowing alone finds."""
     # Winnowing needs >= k + w - 1 (5 + 4 - 1 = 8) tokens to produce any
     # fingerprint at all; fewer than that and it silently returns 0.0.
-    tokens = ["def", "add", "a", "b", "return", "a", "plus", "b"]
     file_data = {
-        "a.py": {"raw": code, "tokens": tokens, "language": "python"},
-        "b.py": {"raw": code, "tokens": tokens, "language": "python"},
+        "a.py": {
+            "raw": "def add(a, b):\n    return a + b\n",
+            "tokens": ["def", "add", "a", "b", "return", "a", "plus", "b"],
+            "language": "python",
+        },
+        "b.py": {
+            "raw": "def total(x, y):\n    return x + y\n",
+            "tokens": ["def", "total", "x", "y", "return", "x", "plus", "y"],
+            "language": "python",
+        },
     }
-    engine = ScanEngine(mode="code_similarity")
-    result = engine.compute(file_data)
-    assert result.matrix is not None
-    assert result.matrix.get(0, 1) == pytest.approx(1.0)
+    auto_matrix = ScanEngine(mode="code_similarity").compute(file_data).matrix
+    winnowing_engine = ScanEngine(mode="code_similarity", algorithm="winnowing")
+    winnowing_matrix = winnowing_engine.compute(file_data).matrix
+    ast_matrix = ScanEngine(mode="code_similarity", algorithm="ast").compute(file_data).matrix
+    assert auto_matrix is not None
+    assert winnowing_matrix is not None
+    assert ast_matrix is not None
+
+    auto_score = auto_matrix.get(0, 1)
+    winnowing_score = winnowing_matrix.get(0, 1)
+    ast_score = ast_matrix.get(0, 1)
+
+    assert ast_score == pytest.approx(1.0)  # AST alone treats the rename as identical
+    assert auto_score == pytest.approx(winnowing_score)
+    assert auto_score != pytest.approx(ast_score)
 
 
 def test_compute_with_preprocessor_populates_similarity_index():
@@ -97,9 +117,9 @@ def test_algorithm_auto_is_default_and_echoed_on_result():
     assert result.algorithm == "auto"
 
 
-def test_forced_cosine_differs_from_auto_blend():
-    """Forcing a single algorithm produces a different score than the mode's
-    default blend, proving the override actually bypasses the blend logic."""
+def test_forced_cosine_differs_from_auto_winnowing():
+    """Forcing cosine produces a different score than auto (winnowing alone),
+    proving the override actually bypasses auto's default model."""
     file_data = {
         "a.txt": {
             "raw": "the quick brown fox jumps over the lazy dog",

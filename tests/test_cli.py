@@ -69,10 +69,8 @@ def test_cli_end_to_end_code_similarity(tmp_path):
     assert (out_dir / "similarity_heatmap.png").is_file()
 
 
-def test_cli_legacy_algorithm_alias_maps_to_mode(tmp_path):
-    """--algorithm ast is documented in the graduation report; it must keep
-    working, mapped onto code_similarity."""
-    out_dir = tmp_path / "cli_alias_output"
+def _run_cli(tmp_path, out_name: str, *extra_args: str):
+    out_dir = tmp_path / out_name
     result = subprocess.run(
         [
             sys.executable,
@@ -80,12 +78,11 @@ def test_cli_legacy_algorithm_alias_maps_to_mode(tmp_path):
             "--files",
             str(SAMPLES_DIR / "sample_code_a.py"),
             str(SAMPLES_DIR / "sample_code_b.py"),
-            "--algorithm",
-            "ast",
             "--threshold",
             "0.4",
             "--output",
             str(out_dir),
+            *extra_args,
         ],
         cwd=str(PLAGCHECK_DIR),
         capture_output=True,
@@ -93,5 +90,68 @@ def test_cli_legacy_algorithm_alias_maps_to_mode(tmp_path):
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    assert "legacy alias" in result.stdout
+    return result, out_dir
+
+
+def _flagged_scores(stdout: str) -> list[float]:
+    """Parse the `a <-> b : 0.1234` lines out of the CLI's flagged summary."""
+    return [float(line.rsplit(":", 1)[1]) for line in stdout.splitlines() if " <-> " in line]
+
+
+def test_cli_algorithm_selects_mode_and_forces_algorithm(tmp_path):
+    """--algorithm ast is documented in the graduation report. It must both
+    select code_similarity *and* actually run AST — it previously only
+    mapped to a mode, so the requested algorithm was silently ignored."""
+    result, _ = _run_cli(tmp_path, "cli_ast_output", "--algorithm", "ast")
     assert "code_similarity" in result.stdout
+    assert "algorithm: ast" in result.stdout
+
+
+def test_cli_flags_the_sample_pair(tmp_path):
+    """The sample pair is B renamed from A — the fixture the report demos.
+    It must actually come back flagged, not merely exit 0 with an empty
+    result, which is what the older artifact-existence assertions allowed."""
+    result, _ = _run_cli(tmp_path, "cli_flagged_output", "--mode", "code_similarity")
+    scores = _flagged_scores(result.stdout)
+    assert scores, f"expected the renamed sample pair to be flagged:\n{result.stdout}"
+    assert scores[0] >= 0.4
+
+
+def test_cli_algorithm_changes_the_score(tmp_path):
+    """Forcing an algorithm must actually change scoring, not silently fall
+    through to the default."""
+    default, _ = _run_cli(tmp_path, "cli_default", "--mode", "code_similarity")
+    jaccard, _ = _run_cli(tmp_path, "cli_jaccard", "--algorithm", "jaccard", "--mode",
+                          "code_similarity")
+    assert _flagged_scores(default.stdout) != _flagged_scores(jaccard.stdout)
+
+
+def test_cli_format_csv_skips_html(tmp_path):
+    """--format gates artifact *generation*, not just which paths get printed."""
+    _, out_dir = _run_cli(tmp_path, "cli_csv_only", "--mode", "code_similarity",
+                          "--format", "csv")
+    assert (out_dir / "similarity_matrix.csv").is_file()
+    assert not (out_dir / "comparison_report.html").exists()
+
+
+def test_cli_exits_nonzero_when_no_file_is_valid(tmp_path):
+    """A scan that can't run must fail loudly — main() used to print
+    "Error: ..." and still exit 0, so callers couldn't detect it."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "plagcheck.py",
+            "--files",
+            str(SAMPLES_DIR / "sample_code_a.py"),  # .py is rejected by text mode
+            "--mode",
+            "text_similarity",
+            "--output",
+            str(tmp_path / "cli_invalid"),
+        ],
+        cwd=str(PLAGCHECK_DIR),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode != 0
+    assert "Need at least 1 valid file" in result.stdout

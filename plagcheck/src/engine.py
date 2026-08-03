@@ -6,27 +6,12 @@ from . import similarity_index
 from .matrix import ComparisonMatrix
 from .models import ASTModel, CosineModel, JaccardModel, WinnowingModel
 
-#: Composition weights per similarity mode. Both modes blend two of the four
-#: documented algorithms rather than picking one, mirroring how a real
-#: plagiarism check triangulates evidence:
-#:  - code_similarity: AST is the only rename-invariant signal, so it
-#:    dominates (0.70) whenever both files are Python; winnowing (0.30)
-#:    catches copy-paste-with-edits. Non-Python code (Java/C/C++) has no AST
-#:    model, so it falls back to winnowing alone.
-#:  - text_similarity: TF-IDF cosine (0.50) catches vocabulary-level
-#:    similarity, winnowing (0.50) catches contiguous copied passages even
-#:    after light paraphrasing — neither alone is sufficient.
-_CODE_AST_WEIGHT = 0.70
-_CODE_WINNOWING_WEIGHT = 0.30
-_TEXT_COSINE_WEIGHT = 0.50
-_TEXT_WINNOWING_WEIGHT = 0.50
-
 #: Algorithms selectable per similarity mode, in UI display order. "auto" is
-#: the mode's designed blend (see weights above); the rest force a single
-#: named model, for demoing/reviewing each one individually. AST needs raw
-#: Python source (`data["raw"]`, not `data["tokens"]`) and always scores 0.0
-#: on non-Python input — callers should disable that choice for non-Python
-#: pairs rather than surface a misleading zero.
+#: the default and scores by matched-span coverage (see `compute`); the rest
+#: force a single named model, for demoing/reviewing each one individually.
+#: AST needs raw Python source (`data["raw"]`, not `data["tokens"]`) and
+#: always scores 0.0 on non-Python input — callers should disable that choice
+#: for non-Python pairs rather than surface a misleading zero.
 ALGORITHMS_BY_MODE: dict[str, list[str]] = {
     "code_similarity": ["auto", "ast", "winnowing", "jaccard"],
     "text_similarity": ["auto", "cosine", "winnowing", "jaccard"],
@@ -51,9 +36,12 @@ class ScanEngine:
     def __init__(self, mode: str = "text_similarity", algorithm: str = "auto"):
         """Select which mode to run, and optionally force a single algorithm.
 
-        `algorithm="auto"` (default) runs the mode's designed blend. Any
-        other value (`ast`, `cosine`, `winnowing`, `jaccard`) forces that one
-        model instead.
+        `algorithm="auto"` (default) scores by matched-span coverage, so the
+        score is literally the fraction of the document the comparison view
+        highlights. Any other value (`ast`, `cosine`, `winnowing`, `jaccard`)
+        forces that one model instead, for demoing/reviewing it on its own —
+        those raw model scores are *not* coverage and may not line up with
+        the highlighting.
         """
         self.mode = mode.lower()
         self.algorithm = algorithm.lower()
@@ -72,28 +60,37 @@ class ScanEngine:
     ) -> ScanResult:
         """Run the scan and return a `ScanResult`.
 
-        `preprocessor` is optional; when supplied, the per-document
-        Similarity Index and ranked source breakdown are also computed (they
-        need the stemmer/stopword set to find matched spans).
+        With a `preprocessor` (both real callers supply one), matched spans
+        are computed once per pair and everything else is derived from them:
+        the matrix scores under `algorithm="auto"`, the per-document
+        Similarity Index, and the ranked source breakdown. Without one, the
+        index/breakdown are skipped and `auto` degrades to winnowing — a
+        library/test path, since span matching needs the stemmer and
+        stopword set.
         """
         names = list(file_data.keys())
         result = ScanResult(mode=self.mode, names=names, algorithm=self.algorithm)
 
+        pair_spans = None
+        if preprocessor is not None:
+            pair_spans, indices, breakdowns = similarity_index.compute_all(
+                file_data, preprocessor, min_match_words
+            )
+            result.similarity_indices = indices
+            result.source_breakdowns = breakdowns
+
         matrix = ComparisonMatrix(names)
         for name_a, name_b in itertools.combinations(names, 2):
             data_a, data_b = file_data[name_a], file_data[name_b]
-            score = self._compute_pair(data_a, data_b)
+            if self.algorithm == "auto" and pair_spans is not None:
+                spans_a, spans_b = pair_spans[(name_a, name_b)]
+                score = similarity_index.pair_score(
+                    data_a["raw"], data_b["raw"], spans_a, spans_b
+                )
+            else:
+                score = self._compute_pair(data_a, data_b)
             matrix.set(names.index(name_a), names.index(name_b), score)
         result.matrix = matrix
-
-        if preprocessor is not None:
-            for name in names:
-                result.similarity_indices[name] = similarity_index.similarity_index(
-                    name, file_data, preprocessor, min_match_words
-                )
-                result.source_breakdowns[name] = similarity_index.source_breakdown(
-                    name, file_data, preprocessor, min_match_words
-                )
 
         return result
 
@@ -103,19 +100,10 @@ class ScanEngine:
         if self.algorithm in ("cosine", "winnowing", "jaccard"):
             return self.models[self.algorithm].compute(data_a["tokens"], data_b["tokens"])
 
-        # algorithm == "auto": the mode's designed blend.
-        if self.mode == "code_similarity":
-            if data_a.get("language") == "python" and data_b.get("language") == "python":
-                ast_score = self.models["ast"].compute([data_a["raw"]], [data_b["raw"]])
-                win_score = self.models["winnowing"].compute(data_a["tokens"], data_b["tokens"])
-                return (ast_score * _CODE_AST_WEIGHT) + (win_score * _CODE_WINNOWING_WEIGHT)
-            # Non-Python code (Java/C/C++): no AST model, winnowing alone.
-            return self.models["winnowing"].compute(data_a["tokens"], data_b["tokens"])
-
-        if self.mode == "text_similarity":
-            cos_score = self.models["cosine"].compute(data_a["tokens"], data_b["tokens"])
-            win_score = self.models["winnowing"].compute(data_a["tokens"], data_b["tokens"])
-            return (cos_score * _TEXT_COSINE_WEIGHT) + (win_score * _TEXT_WINNOWING_WEIGHT)
-
-        # Fallback for an unrecognized mode.
-        return self.models["jaccard"].compute(data_a["tokens"], data_b["tokens"])
+        # algorithm == "auto" with no preprocessor: `compute()` handles the
+        # real coverage path, so reaching here means span matching wasn't
+        # possible. Winnowing is the closest standalone stand-in (it is
+        # k-gram based like the span matcher), but note it under-reports
+        # badly on short inputs — it needs >= k + w - 1 (8) tokens to produce
+        # any fingerprint at all.
+        return self.models["winnowing"].compute(data_a["tokens"], data_b["tokens"])

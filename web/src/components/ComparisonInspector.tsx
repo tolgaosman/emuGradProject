@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getPair } from '../api/client'
 import type { PairResponse } from '../api/types'
 import { CodePane } from './CodePane'
@@ -14,13 +14,10 @@ interface ComparisonInspectorProps {
 
 /** Inline side-by-side comparison card, rendered in the results column
  * below the similarity matrix (not a modal) — matches the mockup's
- * `84% Match` panel. */
+ * `84% Match` panel. Each pane scrolls independently. */
 export function ComparisonInspector({ scanId, fileA, fileB, score, onClose }: ComparisonInspectorProps) {
   const [data, setData] = useState<PairResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const paneA = useRef<HTMLDivElement>(null)
-  const paneB = useRef<HTMLDivElement>(null)
-  const syncing = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -46,16 +43,8 @@ export function ComparisonInspector({ scanId, fileA, fileB, score, onClose }: Co
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const syncScroll = (source: 'a' | 'b') => {
-    if (syncing.current) return
-    const from = source === 'a' ? paneA.current : paneB.current
-    const to = source === 'a' ? paneB.current : paneA.current
-    if (!from || !to) return
-    syncing.current = true
-    const ratio = from.scrollTop / Math.max(1, from.scrollHeight - from.clientHeight)
-    to.scrollTop = ratio * Math.max(1, to.scrollHeight - to.clientHeight)
-    syncing.current = false
-  }
+  const hasNoMatchedSpans =
+    data !== null && data.file_a.matched_spans.length === 0 && data.file_b.matched_spans.length === 0
 
   return (
     <div className="card inspector-card">
@@ -76,19 +65,23 @@ export function ComparisonInspector({ scanId, fileA, fileB, score, onClose }: Co
       {error && <div className="inspector-error">{error}</div>}
       {!data && !error && <SkeletonLoader label="Loading comparison…" />}
 
+      {data && hasNoMatchedSpans && score > 0 && (
+        <p className="inspector-note">
+          No verbatim matching phrases found to highlight — this score comes from overall
+          word-usage similarity (shared vocabulary distribution), not copied text. Force the
+          "Cosine" or "Winnowing" algorithm above and re-run to see which one is driving it.
+        </p>
+      )}
+
       {data && (
         <div className="inspector-panes">
           <CodePane
             text={data.file_a.text}
             spans={data.file_a.matched_spans.map(([start, end]) => ({ start, end }))}
-            paneRef={paneA}
-            onScroll={() => syncScroll('a')}
           />
           <CodePane
             text={data.file_b.text}
             spans={data.file_b.matched_spans.map(([start, end]) => ({ start, end }))}
-            paneRef={paneB}
-            onScroll={() => syncScroll('b')}
           />
         </div>
       )}

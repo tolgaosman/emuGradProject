@@ -49,7 +49,10 @@ def test_check_happy_path(client):
     assert resp.status_code == 200
     assert body["mode"] == "text_similarity"
     assert len(body["pairs"]) == 1
-    assert body["pairs"][0]["score"] == pytest.approx(1.0)
+    # Scores are matched-span coverage, so identical documents land just
+    # under 1.0: characters before the first surviving token and after the
+    # last (here the leading stopword "the ") fall outside every span.
+    assert body["pairs"][0]["score"] == pytest.approx(1.0, abs=0.01)
     assert body["matrix"]["names"] == ["a.txt", "b.txt"]
     assert body["errors"] == []
 
@@ -115,6 +118,48 @@ def test_check_single_file_accepted(client):
     assert resp.status_code == 200
     assert body["matrix"]["names"] == ["a.txt"]
     assert body["pairs"] == []
+
+
+def test_check_duplicate_filenames_do_not_collapse(client):
+    """Two uploads sharing an original filename (e.g. the same file placed
+    in both the reference and candidate slots) must not overwrite each
+    other on disk or in file_data — both must survive as distinct entries."""
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [
+            _upload("dup.txt", "the quick brown fox jumps over the lazy dog " * 20),
+            _upload("dup.txt", "the quick brown fox jumps over the lazy dog " * 20),
+        ],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert len(body["matrix"]["names"]) == 2
+    assert body["matrix"]["names"][0] == "dup.txt"
+    assert body["matrix"]["names"][1] == "dup (2).txt"
+    assert len(body["pairs"]) == 1
+    assert body["pairs"][0]["score"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_check_preserves_non_ascii_filename(client):
+    """The display name (used for matrix names/matching) must match the
+    original filename exactly, including non-ASCII characters — the
+    frontend matches a reference file by comparing this name against the
+    browser's untouched File.name, so any transliteration (e.g. werkzeug's
+    secure_filename turning Turkish 'İ' into 'I') would desync the two."""
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [
+            _upload("İzin Talebi.txt", "the quick brown fox jumps over the lazy dog " * 20),
+            _upload("b.txt", "the quick brown fox jumps over the lazy dog " * 20),
+        ],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert "İzin Talebi.txt" in body["matrix"]["names"]
 
 
 def test_report_roundtrip(client):

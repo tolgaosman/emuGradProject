@@ -92,10 +92,17 @@ behind the `SimilarityModel` ABC in `base.py`:
    AST parsing needs the punctuation the NLP pipeline strips. Only applies to
    Python; Java/C/C++ pairs fall back to winnowing alone.
 
-`engine.py`'s `ScanEngine._compute_pair` is where the two modes' blends live
-(`_CODE_AST_WEIGHT`/`_CODE_WINNOWING_WEIGHT`, `_TEXT_COSINE_WEIGHT`/
-`_TEXT_WINNOWING_WEIGHT`) — a genuine weighted blend, not a plain average, so
-scores stay comparable across mixed-language batches. `ScanEngine.compute()`
+`engine.py`'s `ScanEngine._compute_pair` is where `algorithm="auto"` (the
+default for both modes) resolves to **winnowing alone** — not a blend with
+AST or cosine. Those two were blended in early on but were deliberately
+removed: neither corresponds to a literal span the comparison view can
+highlight (AST scores rename-invariant structure, cosine scores
+whole-document vocabulary overlap), so blending them in let the score rise
+from things there was nothing to show for. Winnowing is exactly what
+`reporter.matched_spans()` highlights, so score and visible evidence stay in
+lockstep. AST/cosine/jaccard remain selectable via an explicit `algorithm=`
+override, for demoing or reviewing one model in isolation.
+`ScanEngine.compute()`
 also computes a Turnitin-style per-document **Similarity Index** and ranked
 **source breakdown** (`similarity_index.py`) when given a `preprocessor` —
 asymmetric "% of this document matched something else," distinct from the

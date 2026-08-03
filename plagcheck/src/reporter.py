@@ -1,4 +1,6 @@
 """ reporter.py — Output artifact generation. """
+import ast
+import copy
 import html
 import io
 import os
@@ -14,8 +16,9 @@ import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 
-from .language import CODE_LANGUAGES  # noqa: E402
+from .language import CODE_LANGUAGES, blank_comments_and_strings  # noqa: E402
 from .matrix import ComparisonMatrix  # noqa: E402
+from .models.ast_model import _NormalizerNodeVisitor  # noqa: E402
 
 _PY_KEEP_TYPES = {py_tokenize.NAME, py_tokenize.NUMBER, py_tokenize.STRING}
 #: Identifiers/keywords and numeric literals for the non-Python code
@@ -38,21 +41,32 @@ class ReportGenerator:
         threshold: float = 0.70,
         file_data: dict | None = None,
         preprocessor=None,
+        min_match_words: int = 0,
+        formats: str = "both",
     ) -> dict[str, str]:
         """Write similarity_matrix.csv, similarity_heatmap.png, and the HTML report.
 
         `file_data` (the same `{name: {"raw", "language", ...}}` mapping the
         engine consumed) and `preprocessor` are optional; when both are
         supplied, the HTML report renders side-by-side panes with matched
-        5-gram spans highlighted for each flagged pair. Without them it falls
-        back to a plain flagged-pairs summary table.
+        spans highlighted for each flagged pair. Without them it falls back to
+        a plain flagged-pairs summary table.
+
+        `min_match_words` must match what the scan scored with, so the
+        highlighting shows exactly the spans that produced the scores.
+        `formats` is `csv` | `html` | `both`; the heatmap PNG is always
+        written since both report formats reference it. Only the requested
+        artifacts are generated, and only those appear in the returned dict.
         """
         os.makedirs(output_dir, exist_ok=True)
-        return {
-            "csv": self._csv(matrix, output_dir),
-            "heatmap": self._heatmap(matrix, output_dir, threshold),
-            "html": self._html(matrix, output_dir, threshold, file_data, preprocessor),
-        }
+        artifacts = {"heatmap": self._heatmap(matrix, output_dir, threshold)}
+        if formats in ("csv", "both"):
+            artifacts["csv"] = self._csv(matrix, output_dir)
+        if formats in ("html", "both"):
+            artifacts["html"] = self._html(
+                matrix, output_dir, threshold, file_data, preprocessor, min_match_words
+            )
+        return artifacts
 
     def _csv(self, m: ComparisonMatrix, out: str) -> str:
         path = os.path.join(out, "similarity_matrix.csv")
@@ -94,11 +108,12 @@ class ReportGenerator:
         thr: float,
         file_data: dict | None,
         preprocessor,
+        min_match_words: int = 0,
     ) -> str:
         flagged = m.get_flagged(thr)
         body = _render_summary(flagged, thr)
         if file_data is not None and preprocessor is not None:
-            body += _render_pairs(flagged, file_data, preprocessor)
+            body += _render_pairs(flagged, file_data, preprocessor, min_match_words)
         else:
             body += _render_flat_table(flagged)
 
@@ -144,12 +159,17 @@ def _python_word_spans(text: str) -> list[tuple[str, int, int]] | None:
     return spans
 
 
-def _code_word_spans(text: str) -> list[tuple[str, int, int]]:
+def _code_word_spans(text: str, language: str) -> list[tuple[str, int, int]]:
     """Return (word, start, end) for identifier/number tokens in non-Python code.
 
-    Matched against the original text (see `_CODE_WORD_RE`).
+    Comments and string literals are blanked out first so this yields the
+    same token stream `preprocessor._tokenize_code` scores on — otherwise a
+    highlighted span could cover comment text that never contributed to the
+    score. `blank_comments_and_strings` pads instead of deleting, so the
+    offsets still index into the original `text`.
     """
-    return [(m.group(), m.start(), m.end()) for m in _CODE_WORD_RE.finditer(text)]
+    masked = blank_comments_and_strings(text, language)
+    return [(m.group(), m.start(), m.end()) for m in _CODE_WORD_RE.finditer(masked)]
 
 
 def _spanned_tokens(text: str, language: str, preprocessor) -> list[tuple[str, int, int]]:
@@ -161,7 +181,7 @@ def _spanned_tokens(text: str, language: str, preprocessor) -> list[tuple[str, i
     if language == "python":
         word_spans = _python_word_spans(text)
     elif language in CODE_LANGUAGES:
-        word_spans = _code_word_spans(text)
+        word_spans = _code_word_spans(text, language)
     else:
         word_spans = None
 
@@ -191,6 +211,62 @@ def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return [(s, e) for s, e in merged]
 
 
+def _normalized_def_spans(text: str) -> list[tuple[str, int, int]] | None:
+    """Return (normalized_ast_dump, start, end) for each function/class in `text`.
+
+    Each definition is normalized in isolation (on a deep copy, since the
+    visitor mutates in place) so its dump depends only on its own structure,
+    not on how many identifiers happened to precede it in the file. Two
+    definitions that differ *only* by identifier names therefore produce the
+    same dump.
+
+    Returns None if `text` isn't parseable Python.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+
+    line_starts = _line_start_offsets(text)
+    out: list[tuple[str, int, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if node.end_lineno is None:
+            continue
+        isolated = copy.deepcopy(node)
+        _NormalizerNodeVisitor().visit(isolated)
+        start = line_starts[node.lineno - 1] + node.col_offset
+        end = line_starts[node.end_lineno - 1] + (node.end_col_offset or 0)
+        out.append((ast.dump(isolated), start, end))
+    return out
+
+
+def _structural_spans(
+    text_a: str, text_b: str
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Char ranges of Python defs/classes that are structurally identical.
+
+    Renaming every variable defeats literal k-gram matching entirely — which
+    is the most common way copied code is disguised, and exactly what the AST
+    model exists to catch. Reporting those matches as spans keeps that
+    evidence *showable*: the score rises only for source the comparison view
+    can actually highlight, and a renamed copy is highlighted function by
+    function rather than scoring near zero.
+    """
+    defs_a = _normalized_def_spans(text_a)
+    defs_b = _normalized_def_spans(text_b)
+    if defs_a is None or defs_b is None:
+        return [], []
+
+    dumps_a = {dump for dump, _, _ in defs_a}
+    dumps_b = {dump for dump, _, _ in defs_b}
+    return (
+        _merge_spans([(s, e) for dump, s, e in defs_a if dump in dumps_b]),
+        _merge_spans([(s, e) for dump, s, e in defs_b if dump in dumps_a]),
+    )
+
+
 def matched_spans(
     text_a: str,
     text_b: str,
@@ -199,7 +275,13 @@ def matched_spans(
     preprocessor,
     k: int = _KGRAM_K,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Find character ranges in `text_a`/`text_b` covered by shared k-grams."""
+    """Find character ranges in `text_a`/`text_b` covered by shared content.
+
+    Literal shared k-grams always count. For a Python-to-Python pair,
+    structurally identical functions/classes count too (see
+    `_structural_spans`) — otherwise a rename-only copy would show no
+    evidence at all.
+    """
     tokens_a = _spanned_tokens(text_a, language_a, preprocessor)
     tokens_b = _spanned_tokens(text_b, language_b, preprocessor)
 
@@ -214,9 +296,15 @@ def matched_spans(
     set_a = {kg for kg, _, _ in kgrams_a}
     set_b = {kg for kg, _, _ in kgrams_b}
 
-    spans_a = _merge_spans([(s, e) for kg, s, e in kgrams_a if kg in set_b])
-    spans_b = _merge_spans([(s, e) for kg, s, e in kgrams_b if kg in set_a])
-    return spans_a, spans_b
+    raw_a = [(s, e) for kg, s, e in kgrams_a if kg in set_b]
+    raw_b = [(s, e) for kg, s, e in kgrams_b if kg in set_a]
+
+    if language_a == "python" and language_b == "python":
+        struct_a, struct_b = _structural_spans(text_a, text_b)
+        raw_a += struct_a
+        raw_b += struct_b
+
+    return _merge_spans(raw_a), _merge_spans(raw_b)
 
 
 def _highlight(text: str, spans: list[tuple[int, int]]) -> str:
@@ -269,7 +357,13 @@ def _render_flat_table(flagged: list[dict]) -> str:
     )
 
 
-def _render_pairs(flagged: list[dict], file_data: dict, preprocessor) -> str:
+def _render_pairs(
+    flagged: list[dict], file_data: dict, preprocessor, min_match_words: int = 0
+) -> str:
+    # Imported here rather than at module scope: similarity_index imports
+    # from this module, so a top-level import would be circular.
+    from .similarity_index import _filter_by_word_count
+
     cards = []
     for pair in flagged:
         name_a, name_b, score = pair["file_a"], pair["file_b"], pair["score"]
@@ -279,6 +373,10 @@ def _render_pairs(flagged: list[dict], file_data: dict, preprocessor) -> str:
         spans_a, spans_b = matched_spans(
             data_a["raw"], data_b["raw"], data_a["language"], data_b["language"], preprocessor
         )
+        # Same filter the scan scored with, so the highlighting can't show
+        # matches the score deliberately excluded.
+        spans_a = _filter_by_word_count(data_a["raw"], spans_a, min_match_words)
+        spans_b = _filter_by_word_count(data_b["raw"], spans_b, min_match_words)
         cards.append(
             _PAIR_TEMPLATE.format(
                 name_a=html.escape(name_a),

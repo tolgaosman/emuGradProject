@@ -1,4 +1,7 @@
 """ matrix.py — ComparisonMatrix. """
+import csv
+import io
+
 import numpy as np
 
 
@@ -25,12 +28,18 @@ class ComparisonMatrix:
         return self.matrix
 
     def to_csv(self) -> str:
-        """Render the matrix as a CSV string with a header row/column."""
-        lines = ["," + ",".join(self.names)]
+        """Render the matrix as a CSV string with a header row/column.
+
+        Written through `csv.writer` rather than joining on commas: file
+        names are original upload names, so one containing a comma or quote
+        would otherwise shift every column in that row.
+        """
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\n")
+        writer.writerow([""] + self.names)
         for i, name in enumerate(self.names):
-            row = [name] + [f"{self.matrix[i, j]:.4f}" for j in range(self.n)]
-            lines.append(",".join(row))
-        return "\n".join(lines)
+            writer.writerow([name] + [f"{self.matrix[i, j]:.4f}" for j in range(self.n)])
+        return buf.getvalue().rstrip("\n")
 
     def all_pairs(self) -> list[dict]:
         """Return every unique (file_a, file_b, score) pair, unfiltered."""

@@ -1,59 +1,70 @@
+import { useState } from 'react'
 import type { CSSProperties } from 'react'
 
 interface HeatmapGridProps {
-  names: string[]
-  scores: number[][]
+  referenceName: string
+  candidateNames: string[]
+  /** Reference-vs-candidate scores, aligned 1:1 with `candidateNames`. */
+  scores: number[]
   threshold: number
-  onCellClick: (fileA: string, fileB: string, score: number) => void
+  onCellClick: (candidateName: string, score: number) => void
 }
 
-export function HeatmapGrid({ names, scores, threshold, onCellClick }: HeatmapGridProps) {
-  const n = names.length
+/** Single-row heatmap: the reference file is the only row, each candidate
+ * is a column — matches the reference/candidate upload model (there's
+ * exactly one file to compare everything else against, not an N×N batch). */
+export function HeatmapGrid({ referenceName, candidateNames, scores, threshold, onCellClick }: HeatmapGridProps) {
+  const n = candidateNames.length
+  const [hoveredCol, setHoveredCol] = useState<number | null>(null)
 
   return (
     <div className="heatmap-scroll">
       <div
-        className="heatmap-grid"
+        className="heatmap-grid heatmap-grid-single-row"
         style={{ '--heatmap-n': n } as CSSProperties}
         role="grid"
         aria-label="Similarity matrix"
+        onMouseLeave={() => setHoveredCol(null)}
       >
         <div className="heatmap-corner" aria-hidden="true" />
-        {names.map((name) => (
-          <div key={`col-${name}`} className="heatmap-col-label" title={name}>
+        {candidateNames.map((name, colIdx) => (
+          <div
+            key={`col-${name}`}
+            className={`heatmap-col-label${hoveredCol === colIdx ? ' heatmap-label-active' : ''}`}
+            title={name}
+          >
             <span>{name}</span>
           </div>
         ))}
 
-        {names.map((rowName, i) => (
-          <div className="heatmap-row" key={`row-${rowName}`} role="row">
-            <div className="heatmap-row-label" title={rowName}>
-              {rowName}
-            </div>
-            {names.map((colName, j) => {
-              const score = scores[i]?.[j] ?? 0
-              const isDiagonal = i === j
-              const flagged = !isDiagonal && score >= threshold
-              const highConfidence = flagged && score >= 0.9
-              return (
-                <button
-                  key={`cell-${rowName}-${colName}`}
-                  type="button"
-                  role="gridcell"
-                  className={`heatmap-cell${flagged ? ' heatmap-cell-flagged' : ''}${
-                    highConfidence ? ' heatmap-cell-high' : ''
-                  }${isDiagonal ? ' heatmap-cell-diagonal' : ''}`}
-                  style={{ '--intensity': isDiagonal ? 0 : score } as CSSProperties}
-                  disabled={isDiagonal}
-                  title={isDiagonal ? rowName : `${rowName} ↔ ${colName}: ${score.toFixed(4)}`}
-                  onClick={() => !isDiagonal && onCellClick(rowName, colName, score)}
-                >
-                  <span className="heatmap-cell-score">{isDiagonal ? '—' : score.toFixed(2)}</span>
-                </button>
-              )
-            })}
+        <div className="heatmap-row" role="row">
+          <div className="heatmap-row-label heatmap-row-label-reference" title={referenceName}>
+            {referenceName}
           </div>
-        ))}
+          {candidateNames.map((name, j) => {
+            const score = scores[j] ?? 0
+            const flagged = score >= threshold
+            const highConfidence = flagged && score >= 0.9
+            const isHovered = hoveredCol === j
+            return (
+              <button
+                key={`cell-${name}`}
+                type="button"
+                role="gridcell"
+                className={`heatmap-cell${flagged ? ' heatmap-cell-flagged' : ''}${
+                  highConfidence ? ' heatmap-cell-high' : ''
+                }${isHovered ? ' heatmap-cell-hovered' : ''}`}
+                style={{ '--intensity': score } as CSSProperties}
+                title={`${referenceName} ↔ ${name}: ${score.toFixed(4)}`}
+                onMouseEnter={() => setHoveredCol(j)}
+                onFocus={() => setHoveredCol(j)}
+                onClick={() => onCellClick(name, score)}
+              >
+                <span className="heatmap-cell-score">{score.toFixed(2)}</span>
+              </button>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
