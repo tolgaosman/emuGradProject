@@ -392,3 +392,105 @@ def test_report_pair_rejects_non_numeric_min_match_words(client):
     resp = client.get(f"/api/report/{scan_id}/pair/a.txt/b.txt?min_match_words=abc")
     assert resp.status_code == 400
     assert resp.get_json()["code"] == "invalid_min_match_words"
+
+
+def _scan_id(client, **files):
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "files": [_upload(name, text) for name, text in files.items()],
+    }
+    resp = client.post("/api/check", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    return resp.get_json()["scan_id"]
+
+
+def test_report_pair_pdf_downloads_as_attachment(client):
+    """The per-row download in the Similarity Report returns a real PDF,
+    served as an attachment so the browser saves rather than renders it."""
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    scan_id = _scan_id(client, **{"a.txt": body_text, "b.txt": body_text})
+
+    resp = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/pdf"
+    assert resp.data[:5] == b"%PDF-"
+    assert resp.headers["Content-Disposition"].startswith("attachment;")
+
+
+def test_report_pair_pdf_states_the_scans_own_score(client):
+    """Score/threshold in the PDF header come from the persisted record, not
+    from query parameters — the export can't be made to claim a score the
+    scan never produced."""
+    import fitz
+
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    scan_id = _scan_id(client, **{"a.txt": body_text, "b.txt": body_text})
+
+    resp = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt?score=0.01")
+    with fitz.open("pdf", resp.data) as doc:
+        text = "".join(page.get_text() for page in doc)
+    assert "Flagged" in text
+    assert "threshold 0.10" in text
+
+
+def test_report_pair_pdf_handles_non_ascii_filenames(client):
+    """A Turkish display name must not break the download header: the
+    ASCII-only `filename=` is a fallback, and `filename*=UTF-8''` carries
+    the real name."""
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    scan_id = _scan_id(client, **{"İzin.txt": body_text, "b.txt": body_text})
+
+    resp = client.get(f"/api/report/{scan_id}/pair-pdf/İzin.txt/b.txt")
+    assert resp.status_code == 200
+    disposition = resp.headers["Content-Disposition"]
+    assert "filename*=UTF-8''" in disposition
+    assert disposition.isascii()
+
+
+def test_report_pair_pdf_honors_min_match_words(client):
+    """Highlighting in the PDF is filtered exactly like the inspector's, so
+    it can never show matches the score excluded."""
+    import fitz
+
+    def fills(data: bytes) -> int:
+        with fitz.open("pdf", data) as doc:
+            return sum(len([d for d in p.get_drawings() if d["fill"]]) for p in doc)
+
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "min_match_words": "1000",  # nothing is this long -> no spans survive
+        "files": [_upload("a.txt", body_text), _upload("b.txt", body_text)],
+    }
+    scan_id = client.post(
+        "/api/check", data=data, content_type="multipart/form-data"
+    ).get_json()["scan_id"]
+
+    strict = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt")
+    lenient = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt?min_match_words=0")
+    assert fills(lenient.data) > fills(strict.data)
+
+
+def test_report_pair_pdf_not_found(client):
+    resp = client.get("/api/report/00000000-0000-0000-0000-000000000000/pair-pdf/a.txt/b.txt")
+    assert resp.status_code == 404
+    assert resp.get_json()["code"] == "not_found"
+
+
+def test_report_pair_pdf_unknown_file_is_not_found(client):
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    scan_id = _scan_id(client, **{"a.txt": body_text, "b.txt": body_text})
+
+    resp = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/missing.txt")
+    assert resp.status_code == 404
+
+
+def test_report_pair_pdf_rejects_non_numeric_min_match_words(client):
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    scan_id = _scan_id(client, **{"a.txt": body_text, "b.txt": body_text})
+
+    resp = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt?min_match_words=abc")
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "invalid_min_match_words"

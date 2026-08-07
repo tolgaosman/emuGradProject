@@ -5,6 +5,7 @@ import { ComparisonInspector } from './components/ComparisonInspector'
 import { DropZone } from './components/DropZone'
 import { EmptyState } from './components/EmptyState'
 import { HeatmapGrid } from './components/HeatmapGrid'
+import { DownloadIcon, RefreshIcon } from './components/icons'
 import { ScanSettings } from './components/ScanSettings'
 import { SimilarityReport } from './components/SimilarityReport'
 import { SkeletonLoader } from './components/SkeletonLoader'
@@ -17,42 +18,6 @@ interface SelectedPair {
   fileA: string
   fileB: string
   score: number
-}
-
-function DownloadIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 19h16"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function RefreshIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M20 11A8 8 0 1 0 18.5 16"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <path
-        d="M20 5v6h-6"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-    </svg>
-  )
 }
 
 function App() {
@@ -274,6 +239,8 @@ function App() {
                     </div>
 
                     <SimilarityReport
+                      scanId={state.result.scan_id}
+                      minMatchWords={state.result.min_match_words}
                       referenceName={matrix.names[refIdx]}
                       names={matrix.names}
                       scores={matrix.scores}

@@ -1,0 +1,204 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-1234567890ab",
+    "name": "PlagCheck API",
+    "description": "Postman Collection for PlagCheck - Plagiarism & File Similarity Detection System Flask REST API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Get System Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "status"]
+            },
+            "description": "Liveness check endpoint returning system status, service name, and version."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Modes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/modes",
+              "host": ["{{base_url}}"],
+              "path": ["api", "modes"]
+            },
+            "description": "List all available scanning modes (e.g. text_similarity, code_similarity)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Algorithms",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/algorithms",
+              "host": ["{{base_url}}"],
+              "path": ["api", "algorithms"]
+            },
+            "description": "List available algorithm choices per scan mode."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Detection & Scans",
+      "item": [
+        {
+          "name": "Detect Language (Code)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"def check_plagiarism(files):\\n    print('Checking files...')\\n    return True\\n\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/detect-language",
+              "host": ["{{base_url}}"],
+              "path": ["api", "detect-language"]
+            },
+            "description": "Detect source code programming language (Python, Java, C, C++) from a code snippet."
+          },
+          "response": []
+        },
+        {
+          "name": "Run Similarity Scan (Check)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    if (jsonData.scan_id) {",
+                  "        pm.environment.set(\"scan_id\", jsonData.scan_id);",
+                  "        console.log(\"Saved scan_id to environment:\", jsonData.scan_id);",
+                  "    }",
+                  "    if (jsonData.pairs && jsonData.pairs.length > 0) {",
+                  "        pm.environment.set(\"file_a\", jsonData.pairs[0].file_a);",
+                  "        pm.environment.set(\"file_b\", jsonData.pairs[0].file_b);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "mode",
+                  "value": "text_similarity",
+                  "type": "text"
+                },
+                {
+                  "key": "threshold",
+                  "value": "0.70",
+                  "type": "text"
+                },
+                {
+                  "key": "algorithm",
+                  "value": "auto",
+                  "type": "text"
+                },
+                {
+                  "key": "min_match_words",
+                  "value": "8",
+                  "type": "text"
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/check",
+              "host": ["{{base_url}}"],
+              "path": ["api", "check"]
+            },
+            "description": "Upload multiple files via multipart/form-data to perform similarity analysis. Automatically saves scan_id, file_a, and file_b to environment variables upon success."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Reports & Analysis",
+      "item": [
+        {
+          "name": "Get Scan Report Metadata",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/report/{{scan_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "report", "{{scan_id}}"]
+            },
+            "description": "Retrieve full scan details and pair scores by scan_id."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Pair Match Comparison",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/report/{{scan_id}}/pair/{{file_a}}/{{file_b}}?min_match_words=8",
+              "host": ["{{base_url}}"],
+              "path": ["api", "report", "{{scan_id}}", "pair", "{{file_a}}", "{{file_b}}"],
+              "query": [
+                {
+                  "key": "min_match_words",
+                  "value": "8"
+                }
+              ]
+            },
+            "description": "Get side-by-side text comparison with highlight span offsets for two specific files in a scan."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Heatmap Image (PNG)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/report/{{scan_id}}/heatmap.png",
+              "host": ["{{base_url}}"],
+              "path": ["api", "report", "{{scan_id}}", "heatmap.png"]
+            },
+            "description": "Stream the 300 DPI similarity matrix heatmap PNG image for a scan."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

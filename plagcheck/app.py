@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import uuid
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
@@ -317,9 +318,13 @@ def api_report(scan_uuid):
     return jsonify(record)
 
 
-@app.route("/api/report/<scan_uuid>/pair/<file_a>/<file_b>", methods=["GET"])
-def api_report_pair(scan_uuid, file_a, file_b):
-    """Return both files' raw text plus matched-span offsets for the inspector."""
+def _pair_payload(scan_uuid: str, file_a: str, file_b: str):
+    """Resolve one pair's raw texts and filtered matched spans.
+
+    Returns `(texts, spans_a, spans_b)`, or an `(error_response, status)`
+    tuple ready to return. Shared by the JSON inspector endpoint and the PDF
+    export so the two can never highlight different things.
+    """
     loaded = _load_raw_texts(scan_uuid)
     if loaded is None:
         return _error("Pair not found.", "not_found", 404)
@@ -342,12 +347,84 @@ def api_report_pair(scan_uuid, file_a, file_b):
         texts[file_b]["language"],
         preprocessor,
     )
-    spans_a = _filter_by_word_count(texts[file_a]["raw"], spans_a, min_match_words)
-    spans_b = _filter_by_word_count(texts[file_b]["raw"], spans_b, min_match_words)
+    return (
+        texts,
+        _filter_by_word_count(texts[file_a]["raw"], spans_a, min_match_words),
+        _filter_by_word_count(texts[file_b]["raw"], spans_b, min_match_words),
+    )
+
+
+@app.route("/api/report/<scan_uuid>/pair/<file_a>/<file_b>", methods=["GET"])
+def api_report_pair(scan_uuid, file_a, file_b):
+    """Return both files' raw text plus matched-span offsets for the inspector."""
+    resolved = _pair_payload(scan_uuid, file_a, file_b)
+    if len(resolved) == 2:  # (error_response, status)
+        return resolved
+    texts, spans_a, spans_b = resolved
+
     return jsonify({
         "file_a": {"name": file_a, "text": texts[file_a]["raw"], "matched_spans": spans_a},
         "file_b": {"name": file_b, "text": texts[file_b]["raw"], "matched_spans": spans_b},
     })
+
+
+def _content_disposition(filename: str) -> str:
+    """Build an attachment header that survives non-ASCII filenames.
+
+    Emits an ASCII-only `filename=` for older clients plus the RFC 5987
+    `filename*=UTF-8''…` form every current browser prefers — a Turkish
+    display name would otherwise be mangled or rejected outright.
+    """
+    ascii_name = filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+@app.route("/api/report/<scan_uuid>/pair-pdf/<file_a>/<file_b>", methods=["GET"])
+def api_report_pair_pdf(scan_uuid, file_a, file_b):
+    """Export one comparison as a PDF with the matched regions highlighted.
+
+    Mounted at `pair-pdf/` rather than `pair/….pdf`: Flask's default string
+    converter would let the existing pair route swallow a `.pdf` suffix as
+    part of `file_b`, making the two routes ambiguous.
+
+    The score/threshold/mode shown in the header come from the persisted scan
+    record, never from query parameters, so the PDF cannot be made to state a
+    score the scan never produced.
+    """
+    resolved = _pair_payload(scan_uuid, file_a, file_b)
+    if len(resolved) == 2:  # (error_response, status)
+        return resolved
+    texts, spans_a, spans_b = resolved
+
+    record = repository.get_scan(scan_uuid) or {}
+    score = next(
+        (
+            p["score"]
+            for p in record.get("pairs", [])
+            if {p["file_a"], p["file_b"]} == {file_a, file_b}
+        ),
+        None,
+    )
+
+    pdf = ReportGenerator().pair_pdf_bytes(
+        file_a,
+        texts[file_a]["raw"],
+        spans_a,
+        file_b,
+        texts[file_b]["raw"],
+        spans_b,
+        score=score,
+        threshold=record.get("threshold"),
+        mode=record.get("algorithm"),
+        algorithm=record.get("algorithm_override"),
+    )
+    stem_a = os.path.splitext(file_a)[0]
+    stem_b = os.path.splitext(file_b)[0]
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": _content_disposition(f"{stem_a} vs {stem_b}.pdf")},
+    )
 
 
 @app.route("/api/report/<scan_uuid>/heatmap.png", methods=["GET"])

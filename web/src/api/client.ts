@@ -130,6 +130,22 @@ export async function getPair(
   return parseJsonOrThrow<PairResponse>(res)
 }
 
+/** Server-rendered PDF of one comparison, with both documents reproduced in
+ * full and the matched regions highlighted — the printable form of what
+ * `ComparisonInspector` shows on screen.
+ *
+ * Like `getPair`, `minMatchWords` defaults server-side to the scan's own
+ * value so the PDF can't highlight more than the score counted. */
+export function pairPdfUrl(
+  scanId: string,
+  fileA: string,
+  fileB: string,
+  minMatchWords?: number,
+): string {
+  const query = minMatchWords === undefined ? '' : `?min_match_words=${minMatchWords}`
+  return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/pair-pdf/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}${query}`
+}
+
 /** Server-rendered 300 DPI heatmap, for downloading the scan as an image. */
 export function heatmapUrl(scanId: string): string {
   return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/heatmap.png`

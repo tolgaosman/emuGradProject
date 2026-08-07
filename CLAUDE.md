@@ -133,7 +133,21 @@ word, which silently zeroed every code scan. The same filter must be applied
 anywhere spans are shown — `/api/report/<uuid>/pair/...` and
 `reporter._render_pairs` both take it, defaulting to the value the scan was
 run with (persisted in the JSON text sidecar), so highlighting can never
-exceed what the score counted.
+exceed what the score counted. The PDF export shares that filtering via
+`app._pair_payload`, which both pair endpoints call, so the on-screen
+inspector and the downloaded PDF cannot highlight different things.
+
+**PDF export** (`ReportGenerator.pair_pdf_bytes`) renders one comparison —
+both documents in full, stacked, with the matched spans marked — via
+`fitz.Story` + `fitz.DocumentWriter` entirely in memory, like
+`heatmap_png_bytes`. PyMuPDF is already a dependency (the PDF *loader*), so
+this adds none. Two constraints to keep in mind: MuPDF's story engine
+*clips* rather than wraps an unbroken run wider than the line box, which is
+why `_wrap_segments` hard-wraps at `_PDF_WRAP_COLS` before rendering (it
+wraps the highlight segments, not the raw text, so `<mark>` boundaries stay
+put); and the header's score/threshold/mode come from
+`repository.get_scan()`, never from query parameters, so a link can't make
+the PDF state a score the scan never produced.
 
 **Data layer** — PostgreSQL, 3NF, `plagcheck/db/schema.sql`: `app_user`,
 `scan_request`, `scan_file`, `scan_pair`, `scan_algorithm`, `audit_log`.
@@ -161,6 +175,7 @@ stalling every request on a TCP timeout.
   `GET /api/modes`, `GET /api/algorithms`, `POST /api/detect-language`,
   `POST /api/check`, `GET /api/report/<scan_uuid>`,
   `GET /api/report/<scan_uuid>/pair/<a>/<b>`,
+  `GET /api/report/<scan_uuid>/pair-pdf/<a>/<b>`,
   `GET /api/report/<scan_uuid>/heatmap.png`. Errors use a
   `{error, code, detail}` envelope; the frontend switches on `code`.
   `/api/detect-language` is a small offline heuristic (regex signature

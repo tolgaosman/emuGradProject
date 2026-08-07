@@ -86,6 +86,13 @@ REST API USAGE  (run from inside plagcheck/)
     POST /api/check               run a comparison (multipart: files[], mode,
                                   algorithm, threshold, min_match_words)
     GET  /api/report/<scan_id>    retrieve a previous scan's flagged pairs
+    GET  /api/report/<scan_id>/pair/<a>/<b>
+                                  both files' text + matched-span offsets
+    GET  /api/report/<scan_id>/pair-pdf/<a>/<b>
+                                  the same comparison as a downloadable PDF
+                                  with the matched regions highlighted
+    GET  /api/report/<scan_id>/heatmap.png
+                                  300 DPI similarity heatmap
 
 
 OUTPUT ARTIFACTS  (in the output/ directory)

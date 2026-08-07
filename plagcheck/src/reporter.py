@@ -8,6 +8,7 @@ import re
 import tokenize as py_tokenize
 from tokenize import TokenError
 
+import fitz
 import matplotlib
 
 matplotlib.use("Agg")
@@ -29,6 +30,11 @@ _PY_KEEP_TYPES = {py_tokenize.NAME, py_tokenize.NUMBER, py_tokenize.STRING}
 #: comment-aware tokenizer in preprocessor.py instead).
 _CODE_WORD_RE = re.compile(r"[A-Za-z_]\w*|\d+\.\d+|\d+")
 _KGRAM_K = 5
+#: Column at which the PDF renderer hard-wraps source lines. MuPDF's story
+#: engine clips (rather than wraps) an unbroken run wider than the line box,
+#: so minified input would lose text without this. Sized to the A4 content
+#: width at the 7.5pt monospace face used in `_PDF_CSS`.
+_PDF_WRAP_COLS = 100
 
 
 class ReportGenerator:
@@ -99,6 +105,64 @@ class ReportGenerator:
         plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
+        return buf.getvalue()
+
+    def pair_pdf_bytes(
+        self,
+        name_a: str,
+        text_a: str,
+        spans_a: list[tuple[int, int]],
+        name_b: str,
+        text_b: str,
+        spans_b: list[tuple[int, int]],
+        score: float | None = None,
+        threshold: float | None = None,
+        mode: str | None = None,
+        algorithm: str | None = None,
+    ) -> bytes:
+        """Render one comparison as a printable PDF, without touching disk.
+
+        Both documents are reproduced in full and stacked (not side by side,
+        which would halve the usable width for no gain on long documents),
+        each with `spans_a`/`spans_b` highlighted. The spans must be the
+        *filtered* ones the scan scored with, so the PDF shows exactly the
+        evidence behind the score it prints in its header.
+
+        `score`/`threshold`/`mode`/`algorithm` are optional: when a scan
+        record can't be read back, the header simply omits those facts rather
+        than stating something the scan never produced.
+        """
+        meta = []
+        if score is not None:
+            meta.append(f"Similarity {score * 100:.1f}%")
+            if threshold is not None:
+                meta.append("Flagged" if score >= threshold else "Below threshold")
+        if threshold is not None:
+            meta.append(f"threshold {threshold:.2f}")
+        if mode:
+            meta.append(html.escape(mode))
+        if algorithm:
+            meta.append(html.escape(algorithm))
+
+        page = _PDF_TEMPLATE.format(
+            name_a=html.escape(name_a),
+            name_b=html.escape(name_b),
+            meta=" &middot; ".join(meta) or "Matched regions highlighted",
+            body_a=_segments_to_html(_wrap_segments(_highlight_segments(text_a, spans_a))),
+            body_b=_segments_to_html(_wrap_segments(_highlight_segments(text_b, spans_b))),
+        )
+
+        story = fitz.Story(html=page, user_css=_PDF_CSS)
+        buf = io.BytesIO()
+        writer = fitz.DocumentWriter(buf)
+        content = fitz.paper_rect("a4") + (36, 36, -36, -36)
+        more = 1
+        while more:
+            device = writer.begin_page(fitz.paper_rect("a4"))
+            more, _ = story.place(content)
+            story.draw(device)
+            writer.end_page()
+        writer.close()
         return buf.getvalue()
 
     def _html(
@@ -307,18 +371,68 @@ def matched_spans(
     return _merge_spans(raw_a), _merge_spans(raw_b)
 
 
-def _highlight(text: str, spans: list[tuple[int, int]]) -> str:
-    """Render `text` as escaped HTML with `spans` wrapped in <mark> tags."""
+def _highlight_segments(text: str, spans: list[tuple[int, int]]) -> list[tuple[str, bool]]:
+    """Split `text` into `(chunk, is_matched)` pairs along `spans`.
+
+    Empty chunks are dropped, so a span starting at offset 0 or ending at the
+    last character doesn't introduce blank segments.
+    """
     if not spans:
-        return html.escape(text)
-    parts = []
+        return [(text, False)] if text else []
+    segments: list[tuple[str, bool]] = []
     cursor = 0
     for start, end in spans:
-        parts.append(html.escape(text[cursor:start]))
-        parts.append(f"<mark>{html.escape(text[start:end])}</mark>")
+        if start > cursor:
+            segments.append((text[cursor:start], False))
+        if end > start:
+            segments.append((text[start:end], True))
         cursor = end
-    parts.append(html.escape(text[cursor:]))
-    return "".join(parts)
+    if cursor < len(text):
+        segments.append((text[cursor:], False))
+    return segments
+
+
+def _wrap_segments(
+    segments: list[tuple[str, bool]], cols: int = _PDF_WRAP_COLS
+) -> list[tuple[str, bool]]:
+    """Hard-wrap `segments` at `cols` columns, preserving match boundaries.
+
+    The PDF renderer lays text out with MuPDF's story engine, which *clips* a
+    single unbroken run wider than the line box instead of wrapping it — a
+    minified file would silently lose most of its content. Breaking the
+    segments rather than the raw text keeps every `<mark>` boundary exactly
+    where `matched_spans` put it.
+    """
+    out: list[tuple[str, bool]] = []
+    column = 0
+    for chunk, marked in segments:
+        buffer: list[str] = []
+        for char in chunk:
+            if char == "\n":
+                buffer.append(char)
+                column = 0
+                continue
+            if column >= cols:
+                buffer.append("\n")
+                column = 0
+            buffer.append(char)
+            column += 1
+        if buffer:
+            out.append(("".join(buffer), marked))
+    return out
+
+
+def _segments_to_html(segments: list[tuple[str, bool]]) -> str:
+    """Escape `segments` and wrap the matched ones in <mark> tags."""
+    return "".join(
+        f"<mark>{html.escape(chunk)}</mark>" if marked else html.escape(chunk)
+        for chunk, marked in segments
+    )
+
+
+def _highlight(text: str, spans: list[tuple[int, int]]) -> str:
+    """Render `text` as escaped HTML with `spans` wrapped in <mark> tags."""
+    return _segments_to_html(_highlight_segments(text, spans))
 
 
 # --------------------------------------------------------------------------
@@ -401,6 +515,36 @@ _PAIR_TEMPLATE = """
     <pre class="pane"><code>{text_b}</code></pre>
   </div>
 </details>
+"""
+
+#: Print stylesheet for `pair_pdf_bytes`. Deliberately light-only — this is
+#: paper output, so the dark-mode block in `_PAGE_TEMPLATE` has no meaning
+#: here. Kept to the CSS subset MuPDF's story engine actually supports.
+_PDF_CSS = """
+body { font-family: sans-serif; font-size: 9pt; color: #171717; }
+h1 { font-size: 13pt; margin: 0 0 2pt 0; }
+.names { font-size: 10pt; margin: 0 0 2pt 0; }
+.meta { font-size: 8pt; color: #737373; margin: 0 0 10pt 0; }
+h2 {
+  font-size: 9pt; color: #737373; margin: 12pt 0 4pt 0;
+  border-bottom: 1px solid #e5e5e5; padding-bottom: 2pt;
+}
+pre {
+  font-family: monospace; font-size: 7.5pt; line-height: 1.35;
+  white-space: pre-wrap; margin: 0;
+}
+mark { background-color: #fde68a; }
+"""
+
+_PDF_TEMPLATE = """<html><body>
+<h1>PlagCheck Similarity Report</h1>
+<p class="names">{name_a} &harr; {name_b}</p>
+<p class="meta">{meta}</p>
+<h2>Reference &mdash; {name_a}</h2>
+<pre>{body_a}</pre>
+<h2>Compared &mdash; {name_b}</h2>
+<pre>{body_b}</pre>
+</body></html>
 """
 
 _PAGE_TEMPLATE = """<!DOCTYPE html>
