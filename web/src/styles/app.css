@@ -476,19 +476,24 @@
 }
 
 .dropzone-plus {
-  font-size: 1.1rem;
   color: var(--text-faint);
-  width: 1.6em;
-  height: 1.6em;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   border: 1px dashed var(--border-strong);
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   transition:
     color var(--duration-base) var(--ease-out),
     border-color var(--duration-base) var(--ease-out);
+}
+
+.dropzone-plus svg {
+  display: block;
+  width: 12px;
+  height: 12px;
 }
 
 .dropzone-active .dropzone-plus {

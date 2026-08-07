@@ -16,22 +16,24 @@ async function parseJsonOrThrow<T>(res: Response): Promise<T> {
   return body as T
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+
 /** Algorithm choices selectable per mode, for the ALGORITHM chip row. */
 export async function getAlgorithms(): Promise<AlgorithmsResponse> {
-  const res = await fetch('/api/algorithms')
+  const res = await fetch(`${API_BASE}/api/algorithms`)
   return parseJsonOrThrow<AlgorithmsResponse>(res)
 }
 
 /** Liveness check, for the top bar's "System Ready" indicator. */
 export async function getStatus(): Promise<StatusResponse> {
-  const res = await fetch('/api/status')
+  const res = await fetch(`${API_BASE}/api/status`)
   return parseJsonOrThrow<StatusResponse>(res)
 }
 
 /** Guess the language of a pasted code snippet, for the paste-box UI in
  * code_similarity mode. */
 export async function detectLanguage(text: string): Promise<DetectLanguageResponse> {
-  const res = await fetch('/api/detect-language', {
+  const res = await fetch(`${API_BASE}/api/detect-language`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
@@ -80,7 +82,7 @@ export function runCheck(opts: CheckOptions): RunningCheck {
   const xhr = new XMLHttpRequest()
 
   const promise = new Promise<CheckResponse>((resolve, reject) => {
-    xhr.open('POST', '/api/check')
+    xhr.open('POST', `${API_BASE}/api/check`)
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
@@ -123,12 +125,12 @@ export async function getPair(
 ): Promise<PairResponse> {
   const query = minMatchWords === undefined ? '' : `?min_match_words=${minMatchWords}`
   const res = await fetch(
-    `/api/report/${encodeURIComponent(scanId)}/pair/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}${query}`,
+    `${API_BASE}/api/report/${encodeURIComponent(scanId)}/pair/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}${query}`,
   )
   return parseJsonOrThrow<PairResponse>(res)
 }
 
 /** Server-rendered 300 DPI heatmap, for downloading the scan as an image. */
 export function heatmapUrl(scanId: string): string {
-  return `/api/report/${encodeURIComponent(scanId)}/heatmap.png`
+  return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/heatmap.png`
 }
