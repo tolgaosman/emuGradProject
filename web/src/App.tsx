@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { heatmapUrl } from './api/client'
 import type { Algorithm, Mode } from './api/types'
 import { ComparisonInspector } from './components/ComparisonInspector'
 import { DropZone } from './components/DropZone'
@@ -16,6 +17,20 @@ interface SelectedPair {
   fileA: string
   fileB: string
   score: number
+}
+
+function DownloadIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 19h16"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
 }
 
 function RefreshIcon() {
@@ -139,6 +154,9 @@ function App() {
               <div
                 className="upload-progress"
                 role="progressbar"
+                aria-label="Upload progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
                 aria-valuenow={Math.round(state.progress * 100)}
               >
                 <div className="upload-progress-bar" style={{ width: `${state.progress * 100}%` }} />
@@ -180,9 +198,27 @@ function App() {
                 const refName = referenceFile?.name
                 const refIdx = matrix && refName ? matrix.names.indexOf(refName) : -1
 
-                if (!matrix?.names.length || refIdx === -1) {
+                if (!matrix?.names.length) {
                   return (
                     <EmptyState title="No comparable files" description="Every uploaded file was rejected." />
+                  )
+                }
+
+                // Candidates can load fine while the reference itself is
+                // rejected (wrong extension for the mode, unreadable PDF).
+                // Saying "every file was rejected" there would be wrong and
+                // would hide which file actually needs attention.
+                if (refIdx === -1) {
+                  const refError = state.result.errors.find((e) => e.file === refName)
+                  return (
+                    <EmptyState
+                      title="Reference file couldn't be processed"
+                      description={
+                        refError
+                          ? `${refError.file} — ${refError.error}`
+                          : 'The reference file was rejected, so there is nothing to compare against.'
+                      }
+                    />
                   )
                 }
 
@@ -207,14 +243,23 @@ function App() {
                           </span>
                           <button
                             type="button"
-                            className={`icon-btn${isBusy ? ' icon-btn-spinning' : ''}`}
-                            title="Re-run with current settings (threshold, algorithm, min match words) without re-uploading"
+                            className="icon-btn"
+                            title="Re-run on the same staged files with the current threshold, algorithm and min match words"
                             aria-label="Re-run scan"
                             disabled={!canScan}
                             onClick={handleScan}
                           >
                             <RefreshIcon />
                           </button>
+                          <a
+                            className="icon-btn"
+                            href={heatmapUrl(state.result.scan_id)}
+                            download={`plagcheck-${state.result.scan_id}.png`}
+                            title="Download the similarity heatmap as a PNG"
+                            aria-label="Download heatmap"
+                          >
+                            <DownloadIcon />
+                          </a>
                         </div>
                       </div>
                       <HeatmapGrid

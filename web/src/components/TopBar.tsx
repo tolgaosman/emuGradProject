@@ -29,7 +29,7 @@ interface TopBarProps {
 export function TopBar({ mode, onModeChange, disabled, theme, onToggleTheme }: TopBarProps) {
   const [apiOnline, setApiOnline] = useState<boolean | null>(null)
   const [scrolled, setScrolled] = useState(false)
-  const groupRef = useRef<HTMLDivElement>(null)
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
   const activeIndex = MODE_OPTIONS.findIndex((o) => o.mode === mode)
 
   useEffect(() => {
@@ -63,8 +63,11 @@ export function TopBar({ mode, onModeChange, disabled, theme, onToggleTheme }: T
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       e.preventDefault()
       const dir = e.key === 'ArrowRight' ? 1 : -1
-      const next = MODE_OPTIONS[(activeIndex + dir + MODE_OPTIONS.length) % MODE_OPTIONS.length]
-      onModeChange(next.mode)
+      const nextIndex = (activeIndex + dir + MODE_OPTIONS.length) % MODE_OPTIONS.length
+      onModeChange(MODE_OPTIONS[nextIndex].mode)
+      // Move focus with the selection: switching modes clears staged files,
+      // so a keyboard user must be able to see where they've landed.
+      optionRefs.current[nextIndex]?.focus()
     }
   }
 
@@ -82,7 +85,6 @@ export function TopBar({ mode, onModeChange, disabled, theme, onToggleTheme }: T
         className="topbar-zone topbar-switch-zone"
         role="radiogroup"
         aria-label="Scanning mode"
-        ref={groupRef}
         onKeyDown={handleKeyDown}
       >
         <div className="topbar-switch">
@@ -91,12 +93,18 @@ export function TopBar({ mode, onModeChange, disabled, theme, onToggleTheme }: T
             style={{ transform: `translateX(${activeIndex * 100}%)` }}
             aria-hidden="true"
           />
-          {MODE_OPTIONS.map((option) => (
+          {MODE_OPTIONS.map((option, i) => (
             <button
               key={option.mode}
               type="button"
               role="radio"
               aria-checked={mode === option.mode}
+              // Roving tabindex: a radiogroup is one tab stop, then arrow
+              // keys move within it — otherwise every option is its own stop.
+              tabIndex={mode === option.mode ? 0 : -1}
+              ref={(el) => {
+                optionRefs.current[i] = el
+              }}
               className={`topbar-switch-btn${mode === option.mode ? ' topbar-switch-btn-active' : ''}`}
               disabled={disabled}
               onClick={() => onModeChange(option.mode)}

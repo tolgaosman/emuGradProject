@@ -34,3 +34,17 @@ def test_to_csv_shape():
     # header + one row per file
     assert len(lines) == 3
     assert lines[0] == ",a,b"
+
+
+def test_to_csv_quotes_names_containing_commas():
+    """Display names are original upload filenames now, so one containing a
+    comma would shift every column in its row if joined naively."""
+    import csv as csv_module
+    import io
+
+    m = ComparisonMatrix(["rapor, kopya.txt", "b.txt"])
+    m.set(0, 1, 0.5)
+    rows = list(csv_module.reader(io.StringIO(m.to_csv())))
+    assert rows[0] == ["", "rapor, kopya.txt", "b.txt"]
+    assert rows[1][0] == "rapor, kopya.txt"
+    assert len(rows[1]) == 3

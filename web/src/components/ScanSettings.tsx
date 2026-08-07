@@ -3,7 +3,11 @@ import { getAlgorithms } from '../api/client'
 import type { Algorithm, Mode } from '../api/types'
 
 const ALGORITHM_LABELS: Record<Algorithm, string> = {
-  auto: 'All Blended',
+  // `auto` scores by matched-span coverage, so the number equals the share
+  // of the document that gets highlighted. The rest are raw model scores,
+  // shown for reviewing each algorithm on its own — they need not line up
+  // with the highlighting.
+  auto: 'Coverage',
   cosine: 'Cosine',
   winnowing: 'Winnowing',
   jaccard: 'Jaccard',

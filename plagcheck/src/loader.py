@@ -44,10 +44,24 @@ class FileLoader:
         Returns a mapping of basename -> extracted text for files that load
         successfully; callers are responsible for surfacing per-file errors
         raised by `load()` for the rest.
+
+        Paths sharing a basename (`old/report.txt`, `new/report.txt`) are
+        disambiguated as `report (2).txt` rather than overwriting each other
+        — same scheme `app.py` and the CLI use for duplicate uploads.
         """
         if len(paths) > MAX_FILES:
             raise FileLoadError(f"Batch of {len(paths)} exceeds max of {MAX_FILES} files.")
-        return {os.path.basename(p): self.load(p, mode) for p in paths}
+        out: dict[str, str] = {}
+        counts: dict[str, int] = {}
+        for path in paths:
+            base = os.path.basename(path)
+            occurrence = counts.get(base, 0)
+            counts[base] = occurrence + 1
+            if occurrence:
+                stem, ext = os.path.splitext(base)
+                base = f"{stem} ({occurrence + 1}){ext}"
+            out[base] = self.load(path, mode)
+        return out
 
     def _validate(self, path, mode: str | None = None):
         name = os.path.basename(path)

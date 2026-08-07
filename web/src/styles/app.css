@@ -306,6 +306,7 @@
   gap: var(--space-3);
 }
 
+/* Also applied to the download <a>, hence the link resets. */
 .icon-btn {
   appearance: none;
   border: 1px solid var(--border-hairline);
@@ -317,6 +318,8 @@
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
+  text-decoration: none;
+  flex-shrink: 0;
   cursor: pointer;
   transition:
     background-color var(--duration-fast) var(--ease-out),
@@ -894,6 +897,12 @@
   overflow: hidden;
 }
 
+/* Only one row label to fit, and it names the file everything is measured
+   against — give it room instead of truncating at the N-row width. */
+.heatmap-grid-single-row {
+  grid-template-columns: minmax(140px, 260px) repeat(var(--heatmap-n), 64px);
+}
+
 .heatmap-corner {
   background: var(--surface-sunken);
   border-bottom: 1px solid var(--border-hairline);
@@ -1025,31 +1034,6 @@
   color: var(--red);
 }
 
-.badge-chip {
-  display: inline-flex;
-  align-items: center;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  font-size: 0.75rem;
-  padding: 0.2em 0.7em;
-  border-radius: var(--radius-full);
-}
-
-.badge-chip.low {
-  background: var(--emerald-bg);
-  color: var(--emerald);
-}
-
-.badge-chip.medium {
-  background: var(--amber-bg);
-  color: var(--amber);
-}
-
-.badge-chip.high {
-  background: var(--red-bg);
-  color: var(--red);
-}
-
 /* ---------- Progress bars (similarity index) ---------- */
 
 .progress-bar-bg {
@@ -1065,19 +1049,17 @@
   transition: width var(--duration-slow) var(--ease-out);
 }
 
+/* Two bands only: below the threshold (clear) and at-or-above it (flagged).
+   The bar mirrors the flag state rather than a separate severity scale, so
+   a row's colour and its 🚩 can never disagree. */
 .progress-bar-fill.low {
   background: var(--emerald);
-}
-
-.progress-bar-fill.medium {
-  background: var(--amber);
 }
 
 .progress-bar-fill.high {
   background: var(--red);
 }
 
-.percentage-badge,
 .similarity-index-percentage {
   font-weight: 600;
   font-size: 0.78rem;
@@ -1087,19 +1069,11 @@
   font-family: var(--font-mono);
 }
 
-.percentage-badge.low,
 .similarity-index-percentage.low {
   background: var(--emerald-bg);
   color: var(--emerald);
 }
 
-.percentage-badge.medium,
-.similarity-index-percentage.medium {
-  background: var(--amber-bg);
-  color: var(--amber);
-}
-
-.percentage-badge.high,
 .similarity-index-percentage.high {
   background: var(--red-bg);
   color: var(--red);

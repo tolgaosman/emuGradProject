@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "npm --prefix web run dev",
     "api": "plagcheck\\venv\\Scripts\\python.exe plagcheck/app.py",
-    "build": "npm --prefix web run build",
+    "build": "npm --prefix web run build && node -e \"require('fs').cpSync('web/dist', '.', {recursive: true})\"",
     "lint": "npm --prefix web run lint"
   }
 }

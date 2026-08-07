@@ -26,19 +26,29 @@ export function HeatmapGrid({ referenceName, candidateNames, scores, threshold, 
         aria-label="Similarity matrix"
         onMouseLeave={() => setHoveredCol(null)}
       >
-        <div className="heatmap-corner" aria-hidden="true" />
-        {candidateNames.map((name, colIdx) => (
-          <div
-            key={`col-${name}`}
-            className={`heatmap-col-label${hoveredCol === colIdx ? ' heatmap-label-active' : ''}`}
-            title={name}
-          >
-            <span>{name}</span>
-          </div>
-        ))}
+        {/* Header cells need their own role="row" — as bare children of
+            role="grid" the structure is invalid and screen readers can't
+            associate a column with its label. */}
+        <div className="heatmap-row" role="row">
+          <div className="heatmap-corner" role="columnheader" aria-hidden="true" />
+          {candidateNames.map((name, colIdx) => (
+            <div
+              key={`col-${name}`}
+              role="columnheader"
+              className={`heatmap-col-label${hoveredCol === colIdx ? ' heatmap-label-active' : ''}`}
+              title={name}
+            >
+              <span>{name}</span>
+            </div>
+          ))}
+        </div>
 
         <div className="heatmap-row" role="row">
-          <div className="heatmap-row-label heatmap-row-label-reference" title={referenceName}>
+          <div
+            className="heatmap-row-label heatmap-row-label-reference"
+            role="rowheader"
+            title={referenceName}
+          >
             {referenceName}
           </div>
           {candidateNames.map((name, j) => {

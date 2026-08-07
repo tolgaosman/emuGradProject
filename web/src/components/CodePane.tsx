@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from 'react'
+import type { ReactNode } from 'react'
 
 export interface CodePaneSpan {
   start: number
@@ -62,17 +62,15 @@ function toLines(text: string, spans: CodePaneSpan[]): Line[] {
 interface CodePaneProps {
   text: string
   spans: CodePaneSpan[]
-  paneRef?: Ref<HTMLDivElement>
-  onScroll?: () => void
 }
 
 /** Line-numbered, span-highlighted source viewer used by the inline
- * pairwise comparison card. */
-export function CodePane({ text, spans, paneRef, onScroll }: CodePaneProps) {
+ * pairwise comparison card. Each pane scrolls independently. */
+export function CodePane({ text, spans }: CodePaneProps) {
   const lines = toLines(text, spans)
 
   return (
-    <div className="code-pane" ref={paneRef} onScroll={onScroll}>
+    <div className="code-pane">
       <table className="code-pane-table">
         <tbody>
           {lines.map((line) => (

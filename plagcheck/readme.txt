@@ -52,17 +52,26 @@ CLI USAGE  (run from inside plagcheck/)
     python plagcheck.py --files <file1> <file2> [more...] [options]
 
 Options:
-    --files       one or more file paths (required)
-    --algorithm   cosine | winnowing | jaccard | ast | all   (default cosine)
-    --threshold   float 0.01 - 0.99                            (default 0.70)
-    --output      output directory                             (default output)
-    --format      html | csv | both                            (default both)
-    --exclusions  path to exclusion list   (default config/exclusions.txt)
+    --files            one or more file paths (required)
+    --mode             text_similarity | code_similarity  (default text_similarity)
+    --algorithm        cosine | winnowing | jaccard | ast | all      (default: none)
+                       Forces a single model and, unless --mode is given, selects
+                       its mode. Omit it (or pass 'all') for the default scoring,
+                       which is matched-span coverage: the score equals the share
+                       of the document the report highlights.
+    --threshold        float 0.01 - 0.99                             (default 0.70)
+    --min-match-words  ignore matches shorter than N words      (default 8, 0 off)
+    --output           output directory                            (default output)
+    --format           html | csv | both                             (default both)
+    --exclusions       path to exclusion list      (default config/exclusions.txt)
+
+Exit status is 0 on a completed scan, 1 if no file could be loaded or an
+argument was out of range.
 
 Example:
     cp -r ../samples ./samples
     python plagcheck.py --files samples/sample_a.txt samples/sample_b.txt \
-        --algorithm all --threshold 0.5
+        --threshold 0.5
 
 NOTE: the loader rejects paths containing '..' (path traversal). Pass files at
 or below the current directory, or use absolute paths.
@@ -74,7 +83,8 @@ REST API USAGE  (run from inside plagcheck/)
 
     GET  /api/status              health check
     GET  /api/algorithms          list supported algorithms
-    POST /api/check               run a comparison (JSON body: files, algorithm, threshold)
+    POST /api/check               run a comparison (multipart: files[], mode,
+                                  algorithm, threshold, min_match_words)
     GET  /api/report/<scan_id>    retrieve a previous scan's flagged pairs
 
 

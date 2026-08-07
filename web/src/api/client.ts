@@ -7,7 +7,6 @@ import type {
   DetectLanguageResponse,
   Mode,
   PairResponse,
-  ReportResponse,
   StatusResponse,
 } from './types'
 
@@ -17,19 +16,13 @@ async function parseJsonOrThrow<T>(res: Response): Promise<T> {
   return body as T
 }
 
-export async function getModes(): Promise<Mode[]> {
-  const res = await fetch('/api/modes')
-  const body = await parseJsonOrThrow<{ modes: Mode[] }>(res)
-  return body.modes
-}
-
 /** Algorithm choices selectable per mode, for the ALGORITHM chip row. */
 export async function getAlgorithms(): Promise<AlgorithmsResponse> {
   const res = await fetch('/api/algorithms')
   return parseJsonOrThrow<AlgorithmsResponse>(res)
 }
 
-/** Liveness check, for the sidebar's "System Ready" status footer. */
+/** Liveness check, for the top bar's "System Ready" indicator. */
 export async function getStatus(): Promise<StatusResponse> {
   const res = await fetch('/api/status')
   return parseJsonOrThrow<StatusResponse>(res)
@@ -55,9 +48,26 @@ export interface CheckOptions {
   onProgress?: (fraction: number) => void
 }
 
+/** A scan in flight. `abort()` cancels the upload so a superseded or reset
+ * scan stops consuming bandwidth and server time instead of merely having
+ * its result ignored. */
+export interface RunningCheck {
+  promise: Promise<CheckResponse>
+  abort: () => void
+}
+
+/** Raised when a scan is cancelled via `RunningCheck.abort()`; callers use
+ * this to tell a deliberate cancel apart from a real failure. */
+export class AbortedError extends Error {
+  constructor() {
+    super('Scan cancelled.')
+    this.name = 'AbortedError'
+  }
+}
+
 /** Upload files and run a scan. Uses XHR (not fetch) so upload progress can
  * be reported to the caller for the drop zone's progress bar. */
-export function runCheck(opts: CheckOptions): Promise<CheckResponse> {
+export function runCheck(opts: CheckOptions): RunningCheck {
   const { files, mode, threshold, algorithm, minMatchWords, onProgress } = opts
 
   const form = new FormData()
@@ -67,8 +77,9 @@ export function runCheck(opts: CheckOptions): Promise<CheckResponse> {
   if (minMatchWords !== undefined) form.append('min_match_words', String(minMatchWords))
   for (const file of files) form.append('files', file, file.name)
 
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
+  const xhr = new XMLHttpRequest()
+
+  const promise = new Promise<CheckResponse>((resolve, reject) => {
     xhr.open('POST', '/api/check')
 
     xhr.upload.onprogress = (e) => {
@@ -90,23 +101,34 @@ export function runCheck(opts: CheckOptions): Promise<CheckResponse> {
       }
     }
 
+    xhr.onabort = () => reject(new AbortedError())
     xhr.onerror = () => reject(new Error('Network error — is the PlagCheck API running?'))
     xhr.send(form)
   })
+
+  return { promise, abort: () => xhr.abort() }
 }
 
-export async function getReport(scanId: string): Promise<ReportResponse> {
-  const res = await fetch(`/api/report/${encodeURIComponent(scanId)}`)
-  return parseJsonOrThrow<ReportResponse>(res)
-}
-
-export async function getPair(scanId: string, fileA: string, fileB: string): Promise<PairResponse> {
+/** Both files' text plus the matched-span offsets to highlight.
+ *
+ * `minMatchWords` defaults server-side to whatever the scan was run with, so
+ * the highlighting matches the score being displayed; pass it only to
+ * explore a different threshold.
+ */
+export async function getPair(
+  scanId: string,
+  fileA: string,
+  fileB: string,
+  minMatchWords?: number,
+): Promise<PairResponse> {
+  const query = minMatchWords === undefined ? '' : `?min_match_words=${minMatchWords}`
   const res = await fetch(
-    `/api/report/${encodeURIComponent(scanId)}/pair/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}`,
+    `/api/report/${encodeURIComponent(scanId)}/pair/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}${query}`,
   )
   return parseJsonOrThrow<PairResponse>(res)
 }
 
+/** Server-rendered 300 DPI heatmap, for downloading the scan as an image. */
 export function heatmapUrl(scanId: string): string {
   return `/api/report/${encodeURIComponent(scanId)}/heatmap.png`
 }

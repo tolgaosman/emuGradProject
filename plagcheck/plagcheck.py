@@ -20,7 +20,8 @@ load_dotenv()
 #: Each value both selects the mode it belongs to (AST only makes sense for
 #: code; the rest default to text) *and* forces that single model, matching
 #: the API's `algorithm` parameter. `all` is a legacy spelling of "the mode's
-#: default", i.e. `auto`.
+#: default", i.e. `auto` — which scores by matched-span coverage rather than
+#: running any single model (see `engine.py`).
 _ALGORITHM_TO_MODE = {
     "ast": "code_similarity",
     "winnowing": "text_similarity",

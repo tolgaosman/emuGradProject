@@ -381,10 +381,15 @@ export function DropZone({
               Clear uploaded files first — upload and paste can't be mixed in the same zone.
             </p>
           )}
+          {detectFailed && override === null && (
+            <p className="dropzone-blocked-note" role="status">
+              Couldn't detect the language — assuming {LANGUAGE_LABEL[FALLBACK_CODE_LANGUAGE]}.
+              Pick one below if that's wrong.
+            </p>
+          )}
           <textarea
             value={pastedText}
             onChange={(e) => handlePasteChange(e.target.value)}
-            onBlur={handlePasteBlur}
             disabled={disabled || pasteBlocked}
             placeholder={
               isTextMode
@@ -398,22 +403,24 @@ export function DropZone({
               {pastedText.length} / {PASTE_CHAR_LIMIT.toLocaleString()} characters
               {!isTextMode && (
                 <span className="paste-area-language">
-                  {detecting
-                    ? ' · detecting…'
-                    : detected
-                      ? ` · detected ${LANGUAGE_LABEL[detected]}`
-                      : pastedText.trim()
-                        ? ' · waiting to detect language…'
-                        : ''}
+                  {override
+                    ? ` · using ${LANGUAGE_LABEL[override]}`
+                    : detecting
+                      ? ' · detecting…'
+                      : autoDetected
+                        ? ` · detected ${LANGUAGE_LABEL[autoDetected]}`
+                        : pastedText.trim()
+                          ? ' · waiting to detect language…'
+                          : ''}
                 </span>
               )}
             </span>
             {!isTextMode && (
               <select
                 aria-label="Override detected language"
-                value={detected ?? ''}
+                value={override ?? ''}
                 disabled={disabled || pasteBlocked || !pastedText.trim()}
-                onChange={(e) => setDetected((e.target.value || null) as Language | null)}
+                onChange={(e) => setOverride((e.target.value || null) as Language | null)}
               >
                 <option value="">Auto-detect</option>
                 <option value="python">Python</option>

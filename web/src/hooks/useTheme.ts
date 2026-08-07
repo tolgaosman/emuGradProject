@@ -29,9 +29,14 @@ export function useTheme(): { theme: Theme; toggleTheme: () => void } {
   }, [theme])
 
   useEffect(() => {
-    if (readStoredTheme()) return
     const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = () => setTheme(systemTheme())
+    const onChange = () => {
+      // Re-checked per event, not once at mount: a user who toggles the
+      // theme during the session has now made an explicit choice, and the
+      // next OS scheme change must not overwrite it.
+      if (readStoredTheme()) return
+      setTheme(systemTheme())
+    }
     mql.addEventListener('change', onChange)
     return () => mql.removeEventListener('change', onChange)
   }, [])

@@ -81,9 +81,9 @@ CREATE INDEX IF NOT EXISTS idx_pair_flagged ON scan_pair (flagged) WHERE flagged
 CREATE TABLE IF NOT EXISTS scan_algorithm (
  scan_id INTEGER NOT NULL REFERENCES scan_request(scan_id) ON DELETE CASCADE,
  -- Historically named for the 4 selectable algorithms; now also stores the
- -- 2 user-facing modes, each of which composes 1-2 of those algorithms
- -- internally (see engine.py's _CODE_*_WEIGHT / _TEXT_*_WEIGHT constants).
- -- Both vocabularies are kept so pre-v2 scan history stays valid.
+ -- 2 user-facing modes. A scan records its mode plus, when one was forced,
+ -- the single algorithm used ('auto' scores by matched-span coverage --
+ -- see engine.py). Both vocabularies are kept so pre-v2 history stays valid.
  algorithm_name VARCHAR(50) NOT NULL,
  PRIMARY KEY (scan_id, algorithm_name)
 );

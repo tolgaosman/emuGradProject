@@ -353,3 +353,42 @@ def test_check_rejects_algorithm_not_valid_for_mode(client):
     resp = client.post("/api/check", data=data, content_type="multipart/form-data")
     assert resp.status_code == 400
     assert resp.get_json()["code"] == "invalid_algorithm"
+
+
+def test_report_pair_honors_min_match_words(client):
+    """The inspector must not highlight spans the score excluded: the pair
+    endpoint defaults to the min_match_words the scan was run with, and
+    accepts an override for exploring."""
+    body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
+    data = {
+        "mode": "text_similarity",
+        "threshold": "0.1",
+        "min_match_words": "1000",  # nothing is this long -> no spans survive
+        "files": [_upload("a.txt", body_text), _upload("b.txt", body_text)],
+    }
+    scan_id = client.post(
+        "/api/check", data=data, content_type="multipart/form-data"
+    ).get_json()["scan_id"]
+
+    strict = client.get(f"/api/report/{scan_id}/pair/a.txt/b.txt").get_json()
+    assert strict["file_a"]["matched_spans"] == []
+
+    lenient = client.get(
+        f"/api/report/{scan_id}/pair/a.txt/b.txt?min_match_words=0"
+    ).get_json()
+    assert lenient["file_a"]["matched_spans"]
+
+
+def test_report_pair_rejects_non_numeric_min_match_words(client):
+    data = {
+        "mode": "text_similarity",
+        "files": [_upload("a.txt", "alpha beta gamma " * 20),
+                  _upload("b.txt", "alpha beta gamma " * 20)],
+    }
+    scan_id = client.post(
+        "/api/check", data=data, content_type="multipart/form-data"
+    ).get_json()["scan_id"]
+
+    resp = client.get(f"/api/report/{scan_id}/pair/a.txt/b.txt?min_match_words=abc")
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "invalid_min_match_words"

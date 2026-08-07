@@ -85,3 +85,53 @@ def test_similarity_index_empty_text_is_zero(pre):
         "other.txt": {"raw": "Some real content here for comparison purposes.", "language": "text"},
     }
     assert similarity_index("empty.txt", file_data, pre) == 0.0
+
+
+def test_code_similarity_index_nonzero_at_default_min_match_words(pre):
+    """min_match_words counted whitespace-separated chunks of raw source, so
+    `def add(a, b):` scored as one "word" and the default of 8 discarded
+    essentially every code span — leaving every code scan reporting 0.0."""
+    src = (
+        "def compute_average(numbers):\n"
+        "    total = 0\n"
+        "    for value in numbers:\n"
+        "        total = total + value\n"
+        "    return total / len(numbers)\n"
+    )
+    file_data = {
+        "a.py": {"raw": src, "language": "python"},
+        "b.py": {"raw": src, "language": "python"},
+    }
+    assert similarity_index("a.py", file_data, pre) > 0.0
+    assert source_breakdown("a.py", file_data, pre)[0]["source"] == "b.py"
+
+
+def test_compute_all_matches_the_per_file_helpers(pre):
+    """compute_all() shares one span-matching pass across the batch; it must
+    agree with the per-file helpers it replaces."""
+    from src.similarity_index import compute_all
+
+    file_data = _file_data()
+    _, indices, breakdowns = compute_all(file_data, pre)
+    for name in file_data:
+        assert indices[name] == pytest.approx(similarity_index(name, file_data, pre))
+        expected = source_breakdown(name, file_data, pre)
+        assert [s["source"] for s in breakdowns[name]] == [s["source"] for s in expected]
+
+
+def test_compute_all_runs_span_matching_once_per_pair(pre, monkeypatch):
+    """The matrix, the index and the breakdown are three views of one
+    computation — recomputing spans for each would be ~5x the work."""
+    import src.similarity_index as si
+
+    calls = {"n": 0}
+    real = si.matched_spans
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(si, "matched_spans", counting)
+    file_data = _file_data()  # 3 files -> 3 unordered pairs
+    si.compute_all(file_data, pre)
+    assert calls["n"] == 3

@@ -58,11 +58,11 @@ Keep every change aligned with this. If a change would contradict it, stop
 and flag the conflict instead of silently diverging.
 
 **Two user-facing modes, not four algorithms directly:** `text_similarity`
-and `code_similarity` (`plagcheck/src/language.py`'s `MODES`). Each mode
-composes 1-2 of the four underlying algorithms into a designed blend — the
-`algorithm` parameter (`auto` | `cosine` | `winnowing` | `jaccard` | `ast`)
-lets a caller force a single one instead, for demoing/reviewing each
-individually. `text_similarity` accepts `.txt`/`.pdf`/`.docx`; `code_similarity`
+and `code_similarity` (`plagcheck/src/language.py`'s `MODES`). Both score by
+matched-span coverage by default (see below); the `algorithm` parameter
+(`auto` | `cosine` | `winnowing` | `jaccard` | `ast`) lets a caller force a
+single raw model instead, for demoing/reviewing each one individually.
+`text_similarity` accepts `.txt`/`.pdf`/`.docx`; `code_similarity`
 accepts `.py`/`.java`/`.c`/`.h`/`.cpp`/`.cc`/`.hpp`. Hard limits: max 10 MB per
 file, max 50 files per batch. A single uploaded file is a valid scan — it just
 produces an empty pair list (no artificial 2-file minimum).
@@ -92,21 +92,48 @@ behind the `SimilarityModel` ABC in `base.py`:
    AST parsing needs the punctuation the NLP pipeline strips. Only applies to
    Python; Java/C/C++ pairs fall back to winnowing alone.
 
-`engine.py`'s `ScanEngine._compute_pair` is where `algorithm="auto"` (the
-default for both modes) resolves to **winnowing alone** — not a blend with
-AST or cosine. Those two were blended in early on but were deliberately
-removed: neither corresponds to a literal span the comparison view can
-highlight (AST scores rename-invariant structure, cosine scores
-whole-document vocabulary overlap), so blending them in let the score rise
-from things there was nothing to show for. Winnowing is exactly what
-`reporter.matched_spans()` highlights, so score and visible evidence stay in
-lockstep. AST/cosine/jaccard remain selectable via an explicit `algorithm=`
-override, for demoing or reviewing one model in isolation.
-`ScanEngine.compute()`
-also computes a Turnitin-style per-document **Similarity Index** and ranked
-**source breakdown** (`similarity_index.py`) when given a `preprocessor` —
-asymmetric "% of this document matched something else," distinct from the
-symmetric pairwise matrix.
+**Scoring is matched-span coverage, not a model score.** With
+`algorithm="auto"` (the default for both modes) `ScanEngine.compute()` scores
+a pair as `max(coverage_a, coverage_b)` where coverage is the fraction of
+that document's characters falling inside `reporter.matched_spans()` — the
+exact ranges the comparison view highlights. The score is therefore, by
+construction, "how much of this document is highlighted", and can never rise
+from something there is nothing to show for. `max` rather than mean so a
+short document copied wholesale into a long one still reads ~100%.
+
+This replaced an earlier `0.5·cosine + 0.5·winnowing` (and `0.7·AST +
+0.3·winnowing`) blend, and then a winnowing-only pass. Don't reintroduce
+either: cosine scores whole-document vocabulary overlap and winnowing
+*samples* k-grams (it keeps roughly a quarter of them and needs `>= k+w-1`
+tokens to emit anything), so both disagree with the highlighting — winnowing
+scored the demo fixtures at 2.6% while the report highlighted 43.6%.
+
+`matched_spans()` counts two kinds of evidence, both highlightable:
+shared literal 5-grams, and — for Python-to-Python pairs — whole
+functions/classes whose *normalized* ASTs match (`reporter._structural_spans`,
+reusing `ast_model._NormalizerNodeVisitor`). The second exists because
+renaming every identifier defeats literal matching completely; it is what
+keeps `samples/sample_code_b.py` (a pure rename of `sample_code_a.py`)
+scoring ~79% instead of ~8%, with each matched function highlighted.
+
+`ScanEngine.compute()` also computes a Turnitin-style per-document
+**Similarity Index** and ranked **source breakdown** (`similarity_index.py`)
+— all three come from one `similarity_index.compute_all()` pass that runs
+span matching once per unordered pair, so the matrix, the index and the
+breakdown can't disagree, and the expensive step isn't repeated. The index is
+the asymmetric "% of this document matched something else," distinct from the
+symmetric pairwise matrix. Without a `preprocessor` the index/breakdown are
+skipped and `auto` degrades to winnowing — a library/test path only; both
+real callers always pass one.
+
+`min_match_words` (Turnitin's "exclude matches smaller than N words",
+default 8) filters spans *before* any of it. It counts `\w+` runs, not
+`str.split()` chunks: whitespace splitting treats `def add(a,b):` as one
+word, which silently zeroed every code scan. The same filter must be applied
+anywhere spans are shown — `/api/report/<uuid>/pair/...` and
+`reporter._render_pairs` both take it, defaulting to the value the scan was
+run with (persisted in the JSON text sidecar), so highlighting can never
+exceed what the score counted.
 
 **Data layer** — PostgreSQL, 3NF, `plagcheck/db/schema.sql`: `app_user`,
 `scan_request`, `scan_file`, `scan_pair`, `scan_algorithm`, `audit_log`.
