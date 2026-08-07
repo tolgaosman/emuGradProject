@@ -30,6 +30,16 @@ def test_generate_writes_all_artifacts(tmp_path):
     assert "0.8500" in html  # flagged pair rendered
 
 
+def test_single_row_heatmap_png_bytes():
+    """single_row_heatmap_png_bytes returns valid PNG bytes for 1xK matrix."""
+    png = ReportGenerator().single_row_heatmap_png_bytes(
+        "sample_a.txt", ["sample_b.txt", "sample_c.docx", "sample_d.pdf"], [0.44, 1.00, 1.00], 0.70
+    )
+    assert isinstance(png, bytes)
+    assert len(png) > 0
+    assert png.startswith(b"\x89PNG")
+
+
 def test_generate_with_no_flagged_pairs_renders_empty_state(tmp_path):
     """When nothing meets the threshold, the summary shows the empty state."""
     m = ComparisonMatrix(["a.txt", "b.txt"])
@@ -115,7 +125,7 @@ def test_heatmap_png_bytes_returns_valid_png_signature():
 
 def _pdf_text(pdf: bytes) -> str:
     with fitz.open("pdf", pdf) as doc:
-        return "".join(page.get_text() for page in doc)
+        return "".join(str(page.get_text("text")) for page in doc)
 
 
 def _pdf_fill_count(pdf: bytes) -> int:

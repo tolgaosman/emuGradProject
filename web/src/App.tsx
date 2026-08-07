@@ -218,7 +218,7 @@ function App() {
                           </button>
                           <a
                             className="icon-btn"
-                            href={heatmapUrl(state.result.scan_id)}
+                            href={heatmapUrl(state.result.scan_id, matrix.names[refIdx])}
                             download={`plagcheck-${state.result.scan_id}.png`}
                             title="Download the similarity heatmap as a PNG"
                             aria-label="Download heatmap"

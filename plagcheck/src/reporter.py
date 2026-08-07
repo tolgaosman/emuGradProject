@@ -107,6 +107,51 @@ class ReportGenerator:
         buf.seek(0)
         return buf.getvalue()
 
+    def single_row_heatmap_png_bytes(
+        self,
+        ref_name: str,
+        candidate_names: list[str],
+        scores: list[float],
+        threshold: float = 0.70,
+    ) -> bytes:
+        """Render a 1xK similarity heatmap (reference file vs candidates) as PNG bytes."""
+        k = len(candidate_names)
+        df = pd.DataFrame([scores], index=[ref_name], columns=candidate_names)
+
+        fig_width = max(6, k * 2.2)
+        fig_height = 2.8
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+        sns.heatmap(
+            df,
+            annot=True,
+            fmt=".2f",
+            cmap="YlOrRd",
+            vmin=0,
+            vmax=1,
+            ax=ax,
+            linewidths=1.0,
+            cbar=True,
+            annot_kws={"size": 11, "weight": "bold"},
+        )
+
+        for j, score in enumerate(scores):
+            if score >= threshold:
+                ax.add_patch(
+                    Rectangle((j, 0), 1, 1, fill=False, edgecolor="red", lw=3)
+                )
+
+        plt.yticks(rotation=0, fontsize=10, fontweight="bold")
+        plt.xticks(rotation=45, ha="right", fontsize=10)
+        plt.title(f"Similarity Matrix (vs {ref_name})", fontsize=12, pad=12, fontweight="bold")
+
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return buf.getvalue()
+
     def pair_pdf_bytes(
         self,
         name_a: str,

@@ -147,6 +147,7 @@ export function pairPdfUrl(
 }
 
 /** Server-rendered 300 DPI heatmap, for downloading the scan as an image. */
-export function heatmapUrl(scanId: string): string {
-  return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/heatmap.png`
+export function heatmapUrl(scanId: string, ref?: string): string {
+  const query = ref ? `?ref=${encodeURIComponent(ref)}` : ''
+  return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/heatmap.png${query}`
 }

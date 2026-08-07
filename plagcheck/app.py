@@ -434,13 +434,34 @@ def api_report_heatmap(scan_uuid):
     if record is None:
         return _error("Report not found.", "not_found", 404)
 
-    names = [f["file_name"] for f in record["files"]]
+    ref = request.args.get("ref")
+    names = [f["file_name"] for f in record.get("files", [])]
+
+    if ref is None and names:
+        ref = names[0]
+
+    if ref and ref != "all" and ref in names:
+        ref_name = ref
+        candidates = [n for n in names if n != ref_name]
+        if candidates:
+            scores = {}
+            for pair in record.get("pairs", []):
+                if pair["file_a"] == ref_name and pair["file_b"] in candidates:
+                    scores[pair["file_b"]] = pair["score"]
+                elif pair["file_b"] == ref_name and pair["file_a"] in candidates:
+                    scores[pair["file_a"]] = pair["score"]
+            row_scores = [scores.get(c, 0.0) for c in candidates]
+            png_bytes = ReportGenerator().single_row_heatmap_png_bytes(
+                ref_name, candidates, row_scores, record.get("threshold", 0.70)
+            )
+            return Response(png_bytes, mimetype="image/png")
+
     matrix = ComparisonMatrix(names)
     index = {name: i for i, name in enumerate(names)}
-    for pair in record["pairs"]:
+    for pair in record.get("pairs", []):
         matrix.set(index[pair["file_a"]], index[pair["file_b"]], pair["score"])
 
-    png_bytes = ReportGenerator().heatmap_png_bytes(matrix, record["threshold"])
+    png_bytes = ReportGenerator().heatmap_png_bytes(matrix, record.get("threshold", 0.70))
     return Response(png_bytes, mimetype="image/png")
 
 
