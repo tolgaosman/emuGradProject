@@ -1,16 +1,16 @@
-# Cursor rules — PlagCheck
+# Cursor rules — backend
 
 See CLAUDE.md for the full architectural ground truth (formats, limits, NLP
 pipeline, the 4 similarity engines, DB schema, interfaces). This file is the
 condensed version for inline Cursor completions.
 
 ## Design law
-- Vercel × Anthropic aesthetic: minimalist, monochrome/muted-pastel,
+- **Taste**: Vercel × Anthropic aesthetic, minimalist, monochrome/muted-pastel,
   high-contrast typography. No default browser colors, no raw unstyled grids.
-- Every frontend state transition gets a smooth, organic animation
-  (`cubic-bezier` easing, not linear). Target 60 fps.
-- Handle every edge case explicitly: loading, error + rollback, empty
-  directory, unsafe filename, oversize file, >50 files, API unreachable.
+- **Emil Kowalski**: Every frontend state transition and micro-interaction gets a
+  smooth, organic animation (`cubic-bezier` easing, not linear). Target 60 fps.
+- **Impeccable**: Pixel-perfection. Handle every edge case explicitly: loading,
+  error + rollback, empty directory, unsafe filename, oversize file, >50 files, API unreachable.
 
 ## Code law
 - Python: strict PEP 8 / PEP 257, type hints everywhere, `ruff check` clean.

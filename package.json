@@ -2,9 +2,9 @@
   "name": "emugradproject",
   "private": true,
   "scripts": {
-    "dev": "npm --prefix web run dev",
-    "api": "plagcheck\\venv\\Scripts\\python.exe plagcheck/app.py",
-    "build": "npm --prefix web run build && node -e \"require('fs').cpSync('web/dist', '.', {recursive: true})\"",
-    "lint": "npm --prefix web run lint"
+    "dev": "npm --prefix frontend run dev",
+    "api": "backend\\venv\\Scripts\\python.exe backend/app.py",
+    "build": "npm --prefix frontend run build && node -e \"require('fs').cpSync('frontend/dist', '.', {recursive: true})\"",
+    "lint": "npm --prefix frontend run lint"
   }
 }

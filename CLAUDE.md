@@ -2,10 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-PlagCheck is a secure, local-execution plagiarism and file-similarity detection
+backend is a secure, local-execution plagiarism and file-similarity detection
 system built for the CMSE 405 graduation project. It ships as a Python CLI
-(`plagcheck/plagcheck.py`), a Flask REST API (`plagcheck/app.py`), and a React
-web UI (`web/`). **It is intentionally offline-only** — file-vs-file similarity
+(`backend/backend.py`), a Flask REST API (`backend/app.py`), and a React
+web UI (`frontend/`). **It is intentionally offline-only** — file-vs-file similarity
 comparison, nothing more. There is no AI-generation detection and no internet/
 external-API comparison anywhere in the system; both were built and then
 deliberately removed to keep the project aligned with its local-execution
@@ -13,18 +13,18 @@ premise. Don't reintroduce either without being explicitly asked.
 
 ## Commands
 
-The virtualenv lives at `plagcheck/venv/` (both `pyrightconfig.json` and
+The virtualenv lives at `backend/venv/` (both `pyrightconfig.json` and
 `.vscode/settings.json` point at it). Run Python tooling from the **repo root**
 via that interpreter — the ruff/pytest/coverage config is all in
 `pyproject.toml`, which only resolves from the root:
 
 ```bash
-plagcheck/venv/Scripts/python.exe -m pytest                      # full suite + coverage gate
-plagcheck/venv/Scripts/python.exe -m pytest --no-cov             # skip the 90% gate while iterating
-plagcheck/venv/Scripts/python.exe -m pytest tests/test_api.py -v # one file
-plagcheck/venv/Scripts/python.exe -m pytest -k tc05              # one test by name
-plagcheck/venv/Scripts/python.exe -m ruff check .                # lint (must be clean)
-plagcheck/venv/Scripts/python.exe -m ruff check --fix .          # autofix
+backend/venv/Scripts/python.exe -m pytest                      # full suite + coverage gate
+backend/venv/Scripts/python.exe -m pytest --no-cov             # skip the 90% gate while iterating
+backend/venv/Scripts/python.exe -m pytest tests/test_api.py -v # one file
+backend/venv/Scripts/python.exe -m pytest -k tc05              # one test by name
+backend/venv/Scripts/python.exe -m ruff check .                # lint (must be clean)
+backend/venv/Scripts/python.exe -m ruff check --fix .          # autofix
 ```
 
 `pytest` enforces `--cov-fail-under=90`, so a green run means both tests and
@@ -32,16 +32,16 @@ coverage passed. Use `--no-cov` mid-change to avoid a red bar from coverage
 alone. There is deliberately **no `pytest.ini`** — it would silently override
 `[tool.pytest.ini_options]` in `pyproject.toml`.
 
-CLI and API (run from inside `plagcheck/`, where `from src.…` imports resolve):
+CLI and API (run from inside `backend/`, where `from src.…` imports resolve):
 
 ```bash
-cd plagcheck
-venv/Scripts/python.exe plagcheck.py --files ../samples/sample_a.txt ../samples/sample_b.txt \
+cd backend
+venv/Scripts/python.exe backend.py --files ../samples/sample_a.txt ../samples/sample_b.txt \
     --mode text_similarity --threshold 0.5 --output ../output
 venv/Scripts/python.exe app.py        # Flask on :5000
 ```
 
-Frontend (from `web/`; Vite dev-proxies `/api` → `localhost:5000`, so run the
+Frontend (from `frontend/`; Vite dev-proxies `/api` → `localhost:5000`, so run the
 Flask app alongside it):
 
 ```bash
@@ -58,7 +58,7 @@ Keep every change aligned with this. If a change would contradict it, stop
 and flag the conflict instead of silently diverging.
 
 **Two user-facing modes, not four algorithms directly:** `text_similarity`
-and `code_similarity` (`plagcheck/src/language.py`'s `MODES`). Both score by
+and `code_similarity` (`backend/src/language.py`'s `MODES`). Both score by
 matched-span coverage by default (see below); the `algorithm` parameter
 (`auto` | `cosine` | `winnowing` | `jaccard` | `ast`) lets a caller force a
 single raw model instead, for demoing/reviewing each one individually.
@@ -67,7 +67,7 @@ accepts `.py`/`.java`/`.c`/`.h`/`.cpp`/`.cc`/`.hpp`. Hard limits: max 10 MB per
 file, max 50 files per batch. A single uploaded file is a valid scan — it just
 produces an empty pair list (no artificial 2-file minimum).
 
-**NLP pipeline** (`plagcheck/src/preprocessor.py`): (1) lowercase, (2) strip
+**NLP pipeline** (`backend/src/preprocessor.py`): (1) lowercase, (2) strip
 punctuation via regex, (3) NLTK word tokenization, (4) remove NLTK English
 stopwords + `config/exclusions.txt`, (5) Porter stemming, (6) 5-gram sliding
 window generation. Python source (`language="python"`) is tokenized with the
@@ -77,7 +77,7 @@ identifier/number extraction) since Python's `tokenize` module only
 understands Python syntax. Both code paths fall back to the prose path if
 tokenizing fails.
 
-**The four similarity engines** (`plagcheck/src/models/`), one class per file
+**The four similarity engines** (`backend/src/models/`), one class per file
 behind the `SimilarityModel` ABC in `base.py`:
 
 1. `cosine.py` — TF-IDF cosine similarity via scikit-learn.
@@ -149,26 +149,26 @@ put); and the header's score/threshold/mode come from
 `repository.get_scan()`, never from query parameters, so a link can't make
 the PDF state a score the scan never produced.
 
-**Data layer** — PostgreSQL, 3NF, `plagcheck/db/schema.sql`: `app_user`,
+**Data layer** — PostgreSQL, 3NF, `backend/db/schema.sql`: `app_user`,
 `scan_request`, `scan_file`, `scan_pair`, `scan_algorithm`, `audit_log`.
 `scan_request.scan_uuid` is the public API identifier; `scan_id` (SERIAL)
 stays the internal PK. Every write goes through
-`plagcheck/src/repository.py`, which falls back to JSON files under
+`backend/src/repository.py`, which falls back to JSON files under
 `output/scans/` when PostgreSQL is unreachable — mirroring the audit
-logger's file fallback in `plagcheck/src/audit.py`. **The app must work fully
+logger's file fallback in `backend/src/audit.py`. **The app must work fully
 offline with no database running**, and the test suite must never require one.
 Connections use `connect_timeout=2` so the offline path fails fast instead of
 stalling every request on a TCP timeout.
 
 **Interfaces:**
 
-- CLI (`plagcheck/plagcheck.py`) is path-based and resolves each `--files`
+- CLI (`backend/backend.py`) is path-based and resolves each `--files`
   entry with `os.path.abspath()` *before* calling the loader. The loader
   rejects `..` as a path component (traversal defense for untrusted input),
   which would otherwise make ordinary relative paths like `../samples/a.txt`
   unusable from the CLI. `--algorithm` is a legacy alias for `--mode` (maps
   `ast`→`code_similarity`, everything else→`text_similarity`).
-- Flask REST API (`plagcheck/app.py`) is **multipart upload-based, never
+- Flask REST API (`backend/app.py`) is **multipart upload-based, never
   path-based** — a browser cannot send server paths, and accepting them is a
   file-read vulnerability. Uploads land in a `tempfile.TemporaryDirectory()`
   sandbox that is always torn down. Endpoints: `GET /api/status`,
@@ -188,9 +188,9 @@ fallback files so the pair-comparison endpoint can rehydrate it.
 
 ## Frontend
 
-`web/` is Vite + React + TypeScript with **no UI-kit dependency**. Design
-tokens are CSS variables in `web/src/styles/tokens.css`; component styles in
-`web/src/styles/app.css`. Both `prefers-color-scheme` and
+`frontend/` is Vite + React + TypeScript with **no UI-kit dependency**. Design
+tokens are CSS variables in `frontend/src/styles/tokens.css`; component styles in
+`frontend/src/styles/app.css`. Both `prefers-color-scheme` and
 `prefers-reduced-motion` are honored — keep new styling inside that token
 system rather than hardcoding colors or durations. Layout is a fixed
 `Sidebar` (mode picker: Text/Code groups, each with one "Similarity Check"
@@ -219,7 +219,7 @@ Client-side validation in `DropZone` mirrors the server's limits (extensions,
 graduation report. Keep those tags and their assertions intact; add new
 coverage as separate untagged tests rather than repurposing a TC.
 
-`tests/conftest.py` puts `plagcheck/` on `sys.path` so tests import as
+`tests/conftest.py` puts `backend/` on `sys.path` so tests import as
 `from src.… import …`, matching how the CLI and API run. API tests
 monkeypatch `_get_connection` to `None` and redirect JSON storage into
 `tmp_path`, so they never touch a real database or the repo's `output/`.
@@ -234,7 +234,7 @@ monkeypatch `_get_connection` to `None` and redirect JSON storage into
 - Reuse `FileLoader`, `Preprocessor`, `ScanEngine`, `ComparisonMatrix`,
   `ReportGenerator`, `AuditLogger`, `ScanRepository` — do not duplicate their
   logic elsewhere.
-- No outbound network calls anywhere in `plagcheck/` — this was tried once
+- No outbound network calls anywhere in `backend/` — this was tried once
   (an internet-source-comparison feature via a paid search API) and reverted
   because it broke the local-execution premise the project is built on. Any
   future request to add AI-generation detection or external API calls should
@@ -245,9 +245,9 @@ monkeypatch `_get_connection` to `None` and redirect JSON storage into
 1. **Taste** — clean, minimalist whitespace, muted pastel or monochrome
    high-contrast tones (Vercel style), elegant typography. Never cheap default
    colors or raw CSS grids without intent.
-2. **Aesthetic interactions** — organic animations and state transitions on
-   every frontend component, smooth easing curves.
-3. **Impeccable execution** — pixel-perfection, 60 fps, explicit handling of
+2. **Emil Kowalski** — organic animations, micro-interactions, and state transitions on
+   every frontend component, smooth `cubic-bezier` easing curves. Target 60 fps for all animations.
+3. **Impeccable** — pixel-perfection, explicit handling of
    loading states, error rollbacks, empty directories, and unsafe filenames.
 4. **Vercel & Anthropic UI/UX** — monochrome design language, user-focused
    simplicity, no visual noise.
