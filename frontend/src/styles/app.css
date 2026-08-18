@@ -255,6 +255,16 @@
   padding: var(--space-6);
   box-shadow: var(--shadow-sm);
   animation: panel-in var(--duration-slow) var(--ease-out) backwards;
+  transition: 
+    transform var(--duration-base) var(--ease-spring),
+    box-shadow var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
 }
 
 @keyframes panel-in {
@@ -357,11 +367,18 @@
     background-color var(--duration-base) var(--ease-out),
     border-color var(--duration-base) var(--ease-out),
     transform var(--duration-base) var(--ease-spring),
-    opacity var(--duration-base) var(--ease-out);
+    opacity var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 
 .btn:active:not(:disabled) {
   transform: scale(0.95);
+  box-shadow: none;
 }
 
 .btn:disabled {
@@ -444,7 +461,14 @@
   transition:
     border-color var(--duration-base) var(--ease-out),
     background-color var(--duration-base) var(--ease-out),
-    transform var(--duration-base) var(--ease-spring);
+    transform var(--duration-base) var(--ease-spring),
+    box-shadow var(--duration-base) var(--ease-out);
+}
+
+.dropzone:hover:not(.dropzone-disabled):not(.dropzone-active) {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  transform: scale(1.01);
 }
 
 .dropzone-active {
@@ -452,6 +476,7 @@
   border-color: var(--accent);
   background: var(--amber-bg);
   transform: scale(1.02);
+  box-shadow: var(--shadow-md);
 }
 
 .dropzone-disabled {
@@ -1120,12 +1145,17 @@
   padding: var(--space-3) var(--space-4);
   transition:
     background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
+    border-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-base) var(--ease-spring),
+    box-shadow var(--duration-base) var(--ease-out);
 }
 
 .similarity-report-row:hover {
   background: var(--surface-sunken);
   border-color: var(--border-strong);
+  transform: scale(1.015);
+  box-shadow: var(--shadow-sm);
+  z-index: 1;
 }
 
 .similarity-report-row-main {

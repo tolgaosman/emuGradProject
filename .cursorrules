@@ -11,6 +11,7 @@ condensed version for inline Cursor completions.
   smooth, organic animation (`cubic-bezier` easing, not linear). Target 60 fps.
 - **Impeccable**: Pixel-perfection. Handle every edge case explicitly: loading,
   error + rollback, empty directory, unsafe filename, oversize file, >50 files, API unreachable.
+- **Anti-slop**: Zero generic AI boilerplate, redundant comments, or unused abstractions. Code must be concise and intentional.
 
 ## Code law
 - Python: strict PEP 8 / PEP 257, type hints everywhere, `ruff check` clean.

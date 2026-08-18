@@ -251,5 +251,7 @@ monkeypatch `_get_connection` to `None` and redirect JSON storage into
    loading states, error rollbacks, empty directories, and unsafe filenames.
 4. **Vercel & Anthropic UI/UX** — monochrome design language, user-focused
    simplicity, no visual noise.
-5. **Best practices** — modular, DRY, typed, clean code. Strict PEP 8 / PEP 257
+5. **Anti-slop** — highly intentional code, zero AI-generated boilerplate, no
+   redundant comments, no unnecessary abstractions. Every line must have a purpose.
+6. **Best practices** — modular, DRY, typed, clean code. Strict PEP 8 / PEP 257
    in Python; component-driven React with clean, minimal state.
