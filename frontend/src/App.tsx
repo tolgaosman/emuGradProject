@@ -70,7 +70,7 @@ function App() {
   const settingsChanged =
     state.status === 'ready' &&
     state.meta.source === 'scan' &&
-    (state.result.algorithm !== algorithm || state.result.min_match_words !== minMatchWords)
+    (state.result.mode !== mode || state.result.algorithm !== algorithm || state.result.min_match_words !== minMatchWords)
 
   const clearStaged = () => {
     setReference([])
@@ -82,9 +82,7 @@ function App() {
     if (next === mode) return
     setMode(next)
     setAlgorithm('auto')
-    clearStaged()
-    setSelected(null)
-    reset()
+    // Mod değişince dosyaları ve ekrandaki sonuçları silme!
   }
 
   const handleWorkspaceChange = (next: Workspace) => {

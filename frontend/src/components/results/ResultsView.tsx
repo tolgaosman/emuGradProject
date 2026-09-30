@@ -1,25 +1,15 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { useState } from 'react'
 import type { CheckResponse } from '../../api/types'
 import type { ResultRow, ResultsModel } from '../../lib/deriveResults'
 import { ALGORITHM_LABEL, MODE_LABEL, formatPercent } from '../../lib/format'
 import { panelMotion } from '../../lib/motion'
-import { GridIcon, ListIcon, RefreshIcon } from '../icons'
-import { Segmented } from '../Segmented'
+import { RefreshIcon } from '../icons'
 import { ExportMenu } from './ExportMenu'
 import type { ExportKind } from './ExportMenu'
 import { HeatmapGrid } from './HeatmapGrid'
 import { ResultsList } from './ResultsList'
-import { SimilarityIndexPanel } from './SimilarityIndexPanel'
 import { SkippedFiles } from './SkippedFiles'
 import { SummaryStrip } from './SummaryStrip'
-
-type View = 'list' | 'matrix'
-
-const VIEW_OPTIONS = [
-  { value: 'list', label: 'Ranked list', icon: <ListIcon /> },
-  { value: 'matrix', label: 'Matrix', icon: <GridIcon /> },
-] as const
 
 interface ResultsViewProps {
   result: CheckResponse
@@ -50,7 +40,6 @@ export function ResultsView({
   onRerun,
   onNewScan,
 }: ResultsViewProps) {
-  const [view, setView] = useState<View>('list')
   const ready = model.kind === 'ready' ? model : null
 
   const findRow = (a: string, b: string) =>
@@ -67,9 +56,6 @@ export function ResultsView({
           </p>
         </div>
         <div className="results-actions">
-          {ready && (
-            <Segmented id="results-view" size="sm" iconOnly label="Results view" options={VIEW_OPTIONS} value={view} onChange={setView} />
-          )}
           <ExportMenu onExport={onExport} busy={exportBusy} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={onNewScan}>
             New scan
@@ -120,34 +106,32 @@ export function ResultsView({
                 </p>
               </div>
             </header>
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div key={view} {...panelMotion}>
-                {view === 'list' ? (
-                  <ResultsList
-                    rows={ready.rows}
-                    layout={ready.layout}
-                    selectedId={selectedId}
-                    onOpen={onOpenPair}
-                    onDownloadPdf={onDownloadPdf}
-                  />
-                ) : (
-                  <HeatmapGrid
-                    names={ready.names}
-                    scores={ready.scores}
-                    threshold={threshold}
-                    reference={ready.reference}
-                    onSelect={(a, b) => {
-                      const row = findRow(a, b)
-                      if (row) onOpenPair(row)
-                    }}
-                  />
-                )}
-              </motion.div>
-            </AnimatePresence>
+            <ResultsList
+              rows={ready.rows}
+              layout={ready.layout}
+              selectedId={selectedId}
+              onOpen={onOpenPair}
+              onDownloadPdf={onDownloadPdf}
+            />
           </section>
 
           {ready.names.length > 2 && (
-            <SimilarityIndexPanel indices={result.similarity_indices} breakdowns={result.source_breakdowns} />
+            <section className="card" aria-label="Similarity matrix">
+              <header className="card-head">
+                <h2 className="card-title">Similarity matrix</h2>
+                <p className="card-subtitle">Visual overview of all comparisons.</p>
+              </header>
+              <HeatmapGrid
+                names={ready.names}
+                scores={ready.scores}
+                threshold={threshold}
+                reference={ready.reference}
+                onSelect={(a, b) => {
+                  const row = findRow(a, b)
+                  if (row) onOpenPair(row)
+                }}
+              />
+            </section>
           )}
         </>
         )

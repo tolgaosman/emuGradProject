@@ -24,3 +24,4 @@ condensed version for inline Cursor completions.
 - Flask API takes file **uploads** (multipart), never server file paths.
 - Before moving to the next task: code must run, `ruff check` must pass,
   and the relevant tests must be green.
+python app.py
