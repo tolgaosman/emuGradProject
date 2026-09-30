@@ -7,10 +7,15 @@ export interface AlgorithmsResponse {
   by_mode: Record<Mode, Algorithm[]>
 }
 
+export type StorageBackend = 'postgres' | 'json'
+
 export interface StatusResponse {
   status: string
   service: string
   version: string
+  uptime_s?: number
+  offline?: boolean
+  storage?: StorageBackend
 }
 
 export interface SimilarityPair {
@@ -18,6 +23,8 @@ export interface SimilarityPair {
   file_b: string
   score: number
   flagged: boolean
+  /** Distinct shared 5-grams (report FR-10). Absent on scans stored in PostgreSQL. */
+  matched_kgrams?: number
 }
 
 export interface ScanMatrix {
@@ -36,6 +43,23 @@ export interface SourceContribution {
   spans: [number, number][]
 }
 
+export interface ScanFileInfo {
+  name: string
+  /** Position in the uploaded batch, so the reference (index 0) is found by
+   * position rather than by a name the server may have sanitized. */
+  index: number
+  language: Language
+  size_bytes: number
+  word_count: number
+}
+
+export interface ScanSummary {
+  pair_count: number
+  flagged_count: number
+  max_score: number
+  mean_score: number
+}
+
 export interface CheckResponse {
   scan_id: string
   mode: Mode
@@ -47,6 +71,9 @@ export interface CheckResponse {
   similarity_indices: Record<string, number>
   source_breakdowns: Record<string, SourceContribution[]>
   errors: FileError[]
+  summary?: ScanSummary
+  files?: ScanFileInfo[]
+  duration_s?: number
 }
 
 export interface ApiErrorBody {
@@ -76,15 +103,34 @@ export interface ScanFileMeta {
   similarity_index?: number | null
 }
 
+/** `GET /api/report/<uuid>`. `algorithm` is the legacy name for the mode;
+ * the forced algorithm lives in `algorithm_override`. */
 export interface ReportResponse {
   scan_uuid: string
+  scan_id: string
   algorithm: Mode
+  mode: Mode
+  algorithm_override: Algorithm
   threshold: number
+  min_match_words: number
   status: string
   timestamp: string
   files: ScanFileMeta[]
   pairs: SimilarityPair[]
+  matrix: ScanMatrix
+  similarity_indices: Record<string, number>
   source_breakdowns: Record<string, SourceContribution[]>
+  comparison_available: boolean
+}
+
+export interface ScanHistoryEntry {
+  scan_uuid: string
+  timestamp: string
+  mode: Mode
+  threshold: number
+  file_names: string[]
+  max_score: number | null
+  flagged_count: number
 }
 
 export interface PairSide {
@@ -96,6 +142,8 @@ export interface PairSide {
 export interface PairResponse {
   file_a: PairSide
   file_b: PairSide
+  matched_kgrams?: number
+  min_match_words?: number
 }
 
 export interface DetectLanguageResponse {

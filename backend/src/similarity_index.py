@@ -28,7 +28,7 @@ Span = tuple[int, int]
 PairSpans = dict[tuple[str, str], tuple[list[Span], list[Span]]]
 
 
-def _filter_by_word_count(text: str, spans: list[Span], min_words: int) -> list[Span]:
+def filter_by_word_count(text: str, spans: list[Span], min_words: int) -> list[Span]:
     """Drop spans covering fewer than `min_words` word-like units."""
     if min_words <= 0:
         return spans
@@ -82,8 +82,8 @@ def compute_all(
             data_a["raw"], data_b["raw"], data_a["language"], data_b["language"], preprocessor
         )
         pair_spans[(name_a, name_b)] = (
-            _filter_by_word_count(data_a["raw"], spans_a, min_match_words),
-            _filter_by_word_count(data_b["raw"], spans_b, min_match_words),
+            filter_by_word_count(data_a["raw"], spans_a, min_match_words),
+            filter_by_word_count(data_b["raw"], spans_b, min_match_words),
         )
 
     indices: dict[str, float] = {}
@@ -140,7 +140,7 @@ def pairwise_matches(
         spans_in_target, _ = matched_spans(
             target["raw"], other["raw"], target["language"], other["language"], preprocessor
         )
-        spans = _filter_by_word_count(target["raw"], spans_in_target, min_match_words)
+        spans = filter_by_word_count(target["raw"], spans_in_target, min_match_words)
         if spans:
             matches[other_name] = spans
     return matches

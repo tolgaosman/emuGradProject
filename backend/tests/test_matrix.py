@@ -1,5 +1,6 @@
 """ test_matrix.py — ComparisonMatrix storage, symmetry, flagging, CSV. """
 import pytest
+
 from src.matrix import ComparisonMatrix
 
 

@@ -1,7 +1,8 @@
 """ test_reporter.py — ReportGenerator artifact generation. """
 import os
 
-import fitz
+import pymupdf
+
 from src.matrix import ComparisonMatrix
 from src.preprocessor import Preprocessor
 from src.reporter import (
@@ -124,13 +125,13 @@ def test_heatmap_png_bytes_returns_valid_png_signature():
 
 
 def _pdf_text(pdf: bytes) -> str:
-    with fitz.open("pdf", pdf) as doc:
+    with pymupdf.open("pdf", pdf) as doc:
         return "".join(str(page.get_text("text")) for page in doc)
 
 
 def _pdf_fill_count(pdf: bytes) -> int:
     """Number of filled rectangles drawn — i.e. rendered <mark> backgrounds."""
-    with fitz.open("pdf", pdf) as doc:
+    with pymupdf.open("pdf", pdf) as doc:
         return sum(len([d for d in page.get_drawings() if d["fill"]]) for page in doc)
 
 

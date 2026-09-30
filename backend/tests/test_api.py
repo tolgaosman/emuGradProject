@@ -1,21 +1,9 @@
 """ test_api.py — Flask REST API (multipart upload, report retrieval). """
 import io
 
-import app as app_module
 import pytest
 
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    """A Flask test client with the DB forced unreachable and JSON storage
-    redirected into a temp dir, so tests never touch a real database or the
-    repo's own output/ directory."""
-    monkeypatch.setattr(app_module.repository, "_get_connection", lambda: None)
-    monkeypatch.setattr(app_module.repository, "json_dir", str(tmp_path / "scans"))
-    monkeypatch.setattr(app_module, "_TEXT_STORE_DIR", str(tmp_path / "texts"))
-    monkeypatch.setattr(app_module.audit, "_get_connection", lambda: None)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+import app as app_module
 
 
 def _upload(name: str, content: str):
@@ -422,13 +410,13 @@ def test_report_pair_pdf_states_the_scans_own_score(client):
     """Score/threshold in the PDF header come from the persisted record, not
     from query parameters — the export can't be made to claim a score the
     scan never produced."""
-    import fitz
+    import pymupdf
 
     body_text = "the quick brown fox jumps over the lazy dog near the water " * 3
     scan_id = _scan_id(client, **{"a.txt": body_text, "b.txt": body_text})
 
     resp = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt?score=0.01")
-    with fitz.open("pdf", resp.data) as doc:
+    with pymupdf.open("pdf", resp.data) as doc:
         text = "".join(page.get_text() for page in doc)
     assert "Flagged" in text
     assert "threshold 0.10" in text
@@ -451,10 +439,10 @@ def test_report_pair_pdf_handles_non_ascii_filenames(client):
 def test_report_pair_pdf_honors_min_match_words(client):
     """Highlighting in the PDF is filtered exactly like the inspector's, so
     it can never show matches the score excluded."""
-    import fitz
+    import pymupdf
 
     def fills(data: bytes) -> int:
-        with fitz.open("pdf", data) as doc:
+        with pymupdf.open("pdf", data) as doc:
             return sum(len([d for d in p.get_drawings() if d["fill"]]) for p in doc)
 
     body_text = "the quick brown fox jumps over the lazy dog near the water " * 3

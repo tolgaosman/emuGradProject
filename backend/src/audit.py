@@ -1,38 +1,33 @@
 """ audit.py — AuditLogger. """
 import json
+import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
-import psycopg2
+from . import db
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_LOG_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "plagcheck.log")
+)
 
 
 class AuditLogger:
     """Writes audit events to `audit_log`.
 
-    Falls back to a local log file when PostgreSQL is unreachable.
+    Falls back to a local log file when PostgreSQL is unreachable. Payloads
+    carry scan metadata (file names, mode, algorithm, scores — FR-14), never
+    document content.
     """
 
-    def __init__(self):
-        """Read DB connection parameters from the environment."""
-        self.db_host = os.environ.get("DB_HOST", "localhost")
-        self.db_name = os.environ.get("DB_NAME", "plagcheck_db")
-        self.db_user = os.environ.get("DB_USER", "plagcheck_user")
-        self.db_pass = os.environ.get("DB_PASS", "password")
-        self.db_port = os.environ.get("DB_PORT", "5432")
+    def __init__(self, log_path: str = _DEFAULT_LOG_PATH):
+        """Set where fallback events are appended when the DB is unavailable."""
+        self.log_path = log_path
 
     def _get_connection(self):
         """Return a new DB connection, or None if the DB is unreachable."""
-        try:
-            return psycopg2.connect(
-                host=self.db_host,
-                database=self.db_name,
-                user=self.db_user,
-                password=self.db_pass,
-                port=self.db_port,
-                connect_timeout=2,
-            )
-        except Exception:
-            return None
+        return db.connect()
 
     def log(
         self,
@@ -41,7 +36,7 @@ class AuditLogger:
         user_id: int | None = None,
         payload: dict | None = None,
     ) -> None:
-        """Insert an audit_log row, or append to plagcheck.log if DB is down.
+        """Insert an audit_log row, or append to the fallback log if DB is down.
 
         `scan_uuid` is the public scan identifier (see `ScanRepository`); it
         is resolved to the internal `scan_request.scan_id` FK when a matching
@@ -85,12 +80,18 @@ class AuditLogger:
         payload: dict | None,
         error_msg: str,
     ) -> None:
-        """Append a single line to plagcheck.log when the DB write failed."""
-        log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "plagcheck.log"))
-        with open(log_path, "a", encoding="utf-8") as f:
-            ts = datetime.now().isoformat()
-            log_line = (
-                f"[{ts}] {event_type} | Scan: {scan_uuid} | User: {user_id} | "
-                f"Payload: {json.dumps(payload)} | Error: {error_msg}\n"
-            )
-            f.write(log_line)
+        """Append one UTC-stamped line to the fallback log.
+
+        Auditing must never fail the scan it describes, so a failure to write
+        here (read-only disk, locked file) is logged and swallowed.
+        """
+        ts = datetime.now(UTC).isoformat()
+        line = (
+            f"[{ts}] {event_type} | Scan: {scan_uuid} | User: {user_id} | "
+            f"Payload: {json.dumps(payload)} | Error: {error_msg}\n"
+        )
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError:
+            logger.exception("Could not write audit fallback log %s", self.log_path)

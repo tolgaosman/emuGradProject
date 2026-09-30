@@ -1,270 +1,303 @@
-import { useState } from 'react'
-import { heatmapUrl } from './api/client'
+import { AnimatePresence } from 'motion/react'
+import { useEffect, useEffectEvent, useMemo, useState } from 'react'
+import { downloadFile, exportUrls } from './api/client'
 import type { Algorithm, Mode } from './api/types'
-import { ComparisonInspector } from './components/ComparisonInspector'
-import { DropZone } from './components/DropZone'
-import { EmptyState } from './components/EmptyState'
-import { HeatmapGrid } from './components/HeatmapGrid'
-import { DownloadIcon, RefreshIcon } from './components/icons'
+import { DropZone } from './components/DropZone/DropZone'
+import { Header } from './components/Header'
+import { HistoryDrawer } from './components/HistoryDrawer'
+import { ComparisonInspector } from './components/inspector/ComparisonInspector'
+import type { ExportKind } from './components/results/ExportMenu'
+import { ResultsCanvas } from './components/results/ResultsCanvas'
+import { RunBar } from './components/RunBar'
+import type { RunPhase } from './components/RunBar'
 import { ScanSettings } from './components/ScanSettings'
-import { SimilarityReport } from './components/SimilarityReport'
-import { SkeletonLoader } from './components/SkeletonLoader'
-import { TopBar } from './components/TopBar'
+import { WorkspaceTabs } from './components/WorkspaceTabs'
+import { useApiStatus } from './hooks/useApiStatus'
 import { useScan } from './hooks/useScan'
 import { useTheme } from './hooks/useTheme'
-import './styles/app.css'
+import { useToast } from './hooks/useToast'
+import { deriveResults } from './lib/deriveResults'
+import type { ResultRow, Workspace } from './lib/deriveResults'
+import { stem } from './lib/format'
 
-interface SelectedPair {
-  fileA: string
-  fileB: string
-  score: number
+const DEFAULT_THRESHOLD = 0.7
+const DEFAULT_MIN_MATCH_WORDS = 8
+
+const EXPORT_NAMES: Record<ExportKind, string> = {
+  html: 'plagcheck-report.html',
+  csv: 'plagcheck-matrix.csv',
+  heatmap: 'plagcheck-heatmap.png',
 }
 
 function App() {
-  const [referenceFile, setReferenceFile] = useState<File | null>(null)
-  const [candidateFiles, setCandidateFiles] = useState<File[]>([])
   const [mode, setMode] = useState<Mode>('text_similarity')
+  const [workspace, setWorkspace] = useState<Workspace>('one-to-many')
+  const [reference, setReference] = useState<File[]>([])
+  const [candidates, setCandidates] = useState<File[]>([])
+  const [batch, setBatch] = useState<File[]>([])
   const [algorithm, setAlgorithm] = useState<Algorithm>('auto')
-  const [threshold, setThreshold] = useState(0.7)
-  const [minMatchWords, setMinMatchWords] = useState(8)
-  const [selectedPair, setSelectedPair] = useState<SelectedPair | null>(null)
+  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD)
+  const [minMatchWords, setMinMatchWords] = useState(DEFAULT_MIN_MATCH_WORDS)
+  const [selected, setSelected] = useState<ResultRow | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [exportBusy, setExportBusy] = useState<ExportKind | null>(null)
 
-  const { state, start, reset } = useScan()
+  const { state, start, open, reset } = useScan()
   const { theme, toggleTheme } = useTheme()
+  const { status: apiStatus, retry: retryStatus } = useApiStatus()
+  const toast = useToast()
 
-  const isBusy = state.status === 'uploading' || state.status === 'processing'
-  // A scan needs exactly one reference file plus at least one candidate to
-  // check against it.
-  const canScan = referenceFile !== null && candidateFiles.length >= 1 && !isBusy
+  const busy = state.status === 'uploading' || state.status === 'processing' || state.status === 'loading'
+  const result = state.status === 'ready' ? state.result : null
+  const files = workspace === 'one-to-many' ? [...reference, ...candidates] : batch
+
+  const blockedReason = (() => {
+    if (apiStatus.state === 'offline') return 'The PlagCheck server is unreachable.'
+    if (workspace === 'batch') return batch.length < 2 ? 'Add at least two documents to compare.' : null
+    if (reference.length === 0) return 'Add the document you want to check.'
+    if (candidates.length === 0) return 'Add at least one document to compare it with.'
+    return null
+  })()
+
+  const model = useMemo(
+    () =>
+      state.status === 'ready'
+        ? deriveResults(state.result, state.meta.layout, threshold, state.meta.referenceName)
+        : null,
+    [state, threshold],
+  )
+
+  const settingsChanged =
+    state.status === 'ready' &&
+    state.meta.source === 'scan' &&
+    (state.result.algorithm !== algorithm || state.result.min_match_words !== minMatchWords)
+
+  const clearStaged = () => {
+    setReference([])
+    setCandidates([])
+    setBatch([])
+  }
 
   const handleModeChange = (next: Mode) => {
+    if (next === mode) return
     setMode(next)
     setAlgorithm('auto')
-    setReferenceFile(null)
-    setCandidateFiles([])
-    setSelectedPair(null)
+    clearStaged()
+    setSelected(null)
     reset()
   }
 
-  const handleScan = () => {
-    if (!referenceFile || !canScan) return
-    setSelectedPair(null)
-    start({ files: [referenceFile, ...candidateFiles], mode, threshold, algorithm, minMatchWords })
+  const handleWorkspaceChange = (next: Workspace) => {
+    setWorkspace(next)
+    setSelected(null)
+    reset()
+  }
+
+  const runScan = () => {
+    if (blockedReason || busy) return
+    setSelected(null)
+    start(
+      { files, mode, threshold, algorithm, minMatchWords },
+      { layout: workspace, referenceName: reference[0]?.name },
+    )
   }
 
   const handleReset = () => {
-    setReferenceFile(null)
-    setCandidateFiles([])
-    setSelectedPair(null)
+    setSelected(null)
     reset()
   }
 
+  const onShortcut = useEffectEvent((e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      runScan()
+    }
+  })
+  useEffect(() => {
+    window.addEventListener('keydown', onShortcut)
+    return () => window.removeEventListener('keydown', onShortcut)
+  }, [])
+
+  // A reopened scan brings its own settings; mirror them so the controls
+  // describe what's on screen.
+  const reopened = state.status === 'ready' && state.meta.source === 'history' ? state.result : null
+  const adoptSettings = useEffectEvent((scan: NonNullable<typeof reopened>) => {
+    if (scan.mode !== mode) {
+      clearStaged()
+      setMode(scan.mode)
+    }
+    setAlgorithm(scan.algorithm)
+    setThreshold(scan.threshold)
+    setMinMatchWords(scan.min_match_words)
+  })
+  useEffect(() => {
+    if (reopened) adoptSettings(reopened)
+  }, [reopened])
+
+  // On stacked (narrow) layouts, bring fresh results into view.
+  useEffect(() => {
+    if (state.status !== 'ready' || !window.matchMedia('(max-width: 1024px)').matches) return
+    document.getElementById('results')?.scrollIntoView({ block: 'start' })
+  }, [state.status])
+
+  const saveExport = (kind: ExportKind) => {
+    if (!result) return
+    const scanId = result.scan_id
+    const url =
+      kind === 'csv'
+        ? exportUrls.csv(scanId)
+        : kind === 'html'
+          ? exportUrls.html(scanId)
+          : exportUrls.heatmap(scanId, model?.kind === 'ready' ? model.reference : undefined)
+    setExportBusy(kind)
+    downloadFile(url, EXPORT_NAMES[kind])
+      .catch((err: unknown) => toast.show(err instanceof Error ? err.message : 'Export failed.', 'error'))
+      .finally(() => setExportBusy(null))
+  }
+
+  const savePairPdf = (row: ResultRow) => {
+    if (!result) return
+    downloadFile(exportUrls.pairPdf(result.scan_id, row.fileA, row.fileB), `${stem(row.fileA)} vs ${stem(row.fileB)}.pdf`).catch(
+      (err: unknown) => toast.show(err instanceof Error ? err.message : 'PDF export failed.', 'error'),
+    )
+  }
+
+  const run: RunPhase =
+    state.status === 'uploading'
+      ? { phase: 'uploading', progress: state.progress }
+      : state.status === 'processing'
+        ? { phase: 'processing' }
+        : { phase: 'ready' }
+
   return (
-    <div className="app-shell">
-      <TopBar
+    <>
+      <Header
         mode={mode}
         onModeChange={handleModeChange}
-        disabled={isBusy}
+        modeLocked={busy}
         theme={theme}
         onToggleTheme={toggleTheme}
+        apiStatus={apiStatus}
+        onRetryStatus={retryStatus}
+        onOpenHistory={() => setHistoryOpen(true)}
       />
 
-      <main className="content-columns">
-        <div className="content-column-left">
-          <ScanSettings
-            mode={mode}
-            algorithm={algorithm}
-            onAlgorithmChange={setAlgorithm}
-            threshold={threshold}
-            onThresholdChange={setThreshold}
-            minMatchWords={minMatchWords}
-            onMinMatchWordsChange={setMinMatchWords}
-            disabled={isBusy}
-          />
+      <main className="page">
+        <h1 className="visually-hidden">PlagCheck — plagiarism and file similarity detection</h1>
+        <WorkspaceTabs value={workspace} onChange={handleWorkspaceChange} disabled={busy} />
 
-          <DropZone
-            title="Reference file"
-            maxFiles={1}
-            files={referenceFile ? [referenceFile] : []}
-            onFilesChange={(next) => setReferenceFile(next[0] ?? null)}
-            disabled={isBusy}
-            mode={mode}
-          />
-
-          <DropZone
-            title="Files to check"
-            files={candidateFiles}
-            onFilesChange={setCandidateFiles}
-            disabled={isBusy}
-            mode={mode}
-          />
-
-          <div className="run-bar">
-            {state.status === 'ready' ? (
-              <button type="button" className="btn btn-secondary btn-block" onClick={handleReset}>
-                New scan
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-primary btn-block"
-                disabled={!canScan}
-                onClick={handleScan}
-              >
-                {isBusy ? 'Scanning…' : '▶ Run Scan'}
-              </button>
-            )}
-
-            {state.status === 'uploading' && (
-              <div
-                className="upload-progress"
-                role="progressbar"
-                aria-label="Upload progress"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(state.progress * 100)}
-              >
-                <div className="upload-progress-bar" style={{ width: `${state.progress * 100}%` }} />
-                <span>Uploading… {Math.round(state.progress * 100)}%</span>
-              </div>
-            )}
-
-            {state.status === 'error' && (
-              <div className="error-banner" role="alert">
-                <strong>Scan failed.</strong> {state.message}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="content-column-right">
-          {state.status === 'processing' && (
-            <SkeletonLoader label="Computing results…" sublabel={`Mode: ${mode}`} />
-          )}
-
-          {(state.status === 'idle' || state.status === 'uploading' || state.status === 'error') && (
-            <EmptyState title="No results yet" description="Run a scan to see the similarity matrix." />
-          )}
-
-          {state.status === 'ready' && (
-            <>
-              {state.result.errors.length > 0 && (
-                <ul className="dropzone-rejections">
-                  {state.result.errors.map((e) => (
-                    <li key={e.file}>
-                      <strong>{e.file}</strong> — {e.error}
-                    </li>
-                  ))}
-                </ul>
+        <div className="workspace" id="workspace-panel" role="tabpanel" aria-labelledby={`workspace-tab-${workspace}`}>
+          <aside className="sidebar" aria-label="Scan setup">
+            <section className="panel" aria-labelledby="documents-title">
+              <h2 id="documents-title" className="panel-title">
+                <span className="panel-step num">1</span>
+                Documents
+              </h2>
+              {workspace === 'one-to-many' ? (
+                <>
+                  <DropZone
+                    label="Check this document"
+                    files={reference}
+                    onFilesChange={setReference}
+                    mode={mode}
+                    maxFiles={1}
+                    disabled={busy}
+                  />
+                  <DropZone
+                    label="Against these"
+                    files={candidates}
+                    onFilesChange={setCandidates}
+                    mode={mode}
+                    maxFiles={49}
+                    disabled={busy}
+                  />
+                </>
+              ) : (
+                <DropZone
+                  label="Submissions"
+                  description="Every file is compared with every other."
+                  files={batch}
+                  onFilesChange={setBatch}
+                  mode={mode}
+                  disabled={busy}
+                />
               )}
+            </section>
 
-              {(() => {
-                const matrix = state.result.matrix
-                const refName = referenceFile?.name
-                const refIdx = matrix && refName ? matrix.names.indexOf(refName) : -1
+            <section className="panel" aria-labelledby="settings-title">
+              <h2 id="settings-title" className="panel-title">
+                <span className="panel-step num">2</span>
+                Review settings
+              </h2>
+              <ScanSettings
+                mode={mode}
+                algorithm={algorithm}
+                onAlgorithmChange={setAlgorithm}
+                threshold={threshold}
+                onThresholdChange={setThreshold}
+                minMatchWords={minMatchWords}
+                onMinMatchWordsChange={setMinMatchWords}
+                disabled={busy}
+              />
+            </section>
 
-                if (!matrix?.names.length) {
-                  return (
-                    <EmptyState title="No comparable files" description="Every uploaded file was rejected." />
-                  )
-                }
+            <RunBar run={run} blockedReason={busy ? null : blockedReason} onRun={runScan} onCancel={handleReset} />
+          </aside>
 
-                // Candidates can load fine while the reference itself is
-                // rejected (wrong extension for the mode, unreadable PDF).
-                // Saying "every file was rejected" there would be wrong and
-                // would hide which file actually needs attention.
-                if (refIdx === -1) {
-                  const refError = state.result.errors.find((e) => e.file === refName)
-                  return (
-                    <EmptyState
-                      title="Reference file couldn't be processed"
-                      description={
-                        refError
-                          ? `${refError.file} — ${refError.error}`
-                          : 'The reference file was rejected, so there is nothing to compare against.'
-                      }
-                    />
-                  )
-                }
-
-                const candidateNames = matrix.names.filter((_, i) => i !== refIdx)
-                const candidateScores = matrix.names
-                  .map((_, i) => i)
-                  .filter((i) => i !== refIdx)
-                  .map((i) => matrix.scores[refIdx]?.[i] ?? 0)
-                const flaggedCount = state.result.pairs.filter(
-                  (p) => p.flagged && (p.file_a === refName || p.file_b === refName),
-                ).length
-
-                return (
-                  <>
-                    <div className="card">
-                      <div className="card-head">
-                        <span className="card-title">Similarity Matrix</span>
-                        <div className="card-head-actions">
-                          <span className="card-flagged-badge">
-                            <span className="card-flagged-dot" aria-hidden="true" />
-                            {flaggedCount} flagged
-                          </span>
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            title="Re-run on the same staged files with the current threshold, algorithm and min match words"
-                            aria-label="Re-run scan"
-                            disabled={!canScan}
-                            onClick={handleScan}
-                          >
-                            <RefreshIcon />
-                          </button>
-                          <a
-                            className="icon-btn"
-                            href={heatmapUrl(state.result.scan_id, matrix.names[refIdx])}
-                            download={`plagcheck-${state.result.scan_id}.png`}
-                            title="Download the similarity heatmap as a PNG"
-                            aria-label="Download heatmap"
-                          >
-                            <DownloadIcon />
-                          </a>
-                        </div>
-                      </div>
-                      <HeatmapGrid
-                        referenceName={matrix.names[refIdx]}
-                        candidateNames={candidateNames}
-                        scores={candidateScores}
-                        threshold={state.result.threshold}
-                        onCellClick={(fileB, score) =>
-                          setSelectedPair({ fileA: matrix.names[refIdx], fileB, score })
-                        }
-                      />
-                    </div>
-
-                    <SimilarityReport
-                      scanId={state.result.scan_id}
-                      minMatchWords={state.result.min_match_words}
-                      referenceName={matrix.names[refIdx]}
-                      names={matrix.names}
-                      scores={matrix.scores}
-                      threshold={state.result.threshold}
-                      onSelectPair={(fileA, fileB, score) => setSelectedPair({ fileA, fileB, score })}
-                    />
-
-                    {selectedPair && (
-                      <ComparisonInspector
-                        scanId={state.result.scan_id}
-                        fileA={selectedPair.fileA}
-                        fileB={selectedPair.fileB}
-                        score={selectedPair.score}
-                        onClose={() => setSelectedPair(null)}
-                      />
-                    )}
-                  </>
-                )
-              })()}
-            </>
-          )}
+          <section id="results" className="canvas" aria-label="Results">
+            <ResultsCanvas
+              state={state}
+              model={model}
+              mode={mode}
+              workspace={workspace}
+              threshold={threshold}
+              settingsChanged={settingsChanged}
+              selectedId={selected?.id ?? null}
+              exportBusy={exportBusy}
+              onOpenPair={setSelected}
+              onDownloadPdf={savePairPdf}
+              onExport={saveExport}
+              onRerun={runScan}
+              onReset={handleReset}
+            />
+          </section>
         </div>
       </main>
-    </div>
+
+      <AnimatePresence>
+        {selected && result && model?.kind === 'ready' && (
+          <ComparisonInspector
+            key="inspector"
+            scanId={result.scan_id}
+            row={selected}
+            rows={model.rows}
+            mode={result.mode}
+            algorithm={result.algorithm}
+            onNavigate={setSelected}
+            onDownloadPdf={savePairPdf}
+            onClose={() => setSelected(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {historyOpen && (
+          <HistoryDrawer
+            key="history"
+            currentScanId={result?.scan_id ?? null}
+            onOpenScan={(scanId) => {
+              setHistoryOpen(false)
+              setSelected(null)
+              open(scanId)
+            }}
+            onDeleted={(scanId) => {
+              if (result?.scan_id === scanId) handleReset()
+            }}
+            onClose={() => setHistoryOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+    </>
   )
 }
 

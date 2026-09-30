@@ -1,5 +1,6 @@
 """ test_cosine.py — CosineModel (TF-IDF cosine similarity). """
 import pytest
+
 from src.models.cosine import CosineModel
 
 

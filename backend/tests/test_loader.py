@@ -2,6 +2,7 @@
 import os
 
 import pytest
+
 from src.loader import MAX_FILES, FileLoader, FileLoadError
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -130,3 +131,79 @@ def test_docx_loads_paragraph_text(loader):
         pytest.skip("sample_c.docx not present in samples/")
     text = loader.load(path)
     assert text.strip()
+
+
+def test_utf8_text_skips_chardet(loader, tmp_path, monkeypatch):
+    """Valid UTF-8 decodes directly; chardet only runs for other encodings."""
+    import src.loader as loader_module
+
+    def never(_raw):
+        raise AssertionError("chardet should not run on valid UTF-8")
+
+    monkeypatch.setattr(loader_module.chardet, "detect", never)
+    f = tmp_path / "turkish.txt"
+    f.write_text("Öğrenci ödevi — İstanbul", encoding="utf-8")
+    assert loader.load(str(f)) == "Öğrenci ödevi — İstanbul"
+
+
+def test_utf8_bom_is_stripped(loader, tmp_path):
+    f = tmp_path / "bom.txt"
+    f.write_bytes("\ufeffhello world".encode())
+    assert loader.load(str(f)) == "hello world"
+
+
+def test_binary_content_rejected(loader, tmp_path):
+    f = tmp_path / "blob.txt"
+    f.write_bytes(b"abc\x00def" * 50)
+    with pytest.raises(FileLoadError, match="binary"):
+        loader.load(str(f))
+
+
+def test_display_name_replaces_path_in_errors(loader, tmp_path):
+    f = tmp_path / "upload_0.txt"
+    f.write_text("", encoding="utf-8")
+    with pytest.raises(FileLoadError) as excinfo:
+        loader.load(str(f), display_name="Essay.txt")
+    assert "Essay.txt" in str(excinfo.value)
+    assert str(tmp_path) not in str(excinfo.value)
+
+
+def _docx(path, paragraphs, table=None):
+    from docx import Document
+
+    document = Document()
+    for text in paragraphs:
+        document.add_paragraph(text)
+    if table:
+        grid = document.add_table(rows=1, cols=len(table))
+        for i, cell in enumerate(table):
+            grid.cell(0, i).text = cell
+    document.save(str(path))
+
+
+def test_docx_tables_are_extracted(loader, tmp_path):
+    path = tmp_path / "t.docx"
+    _docx(path, ["Intro"], ["alpha cell", "beta cell"])
+    text = loader.load(str(path))
+    assert "alpha cell" in text and "beta cell" in text
+
+
+def test_empty_docx_rejected(loader, tmp_path):
+    path = tmp_path / "blank.docx"
+    _docx(path, [])
+    with pytest.raises(FileLoadError, match="No extractable text"):
+        loader.load(str(path))
+
+
+def test_corrupt_docx_raises_file_load_error(loader, tmp_path):
+    path = tmp_path / "broken.docx"
+    path.write_bytes(b"PK\x03\x04 definitely not a zip archive")
+    with pytest.raises(FileLoadError, match="corrupt"):
+        loader.load(str(path))
+
+
+def test_corrupt_pdf_reports_no_text(loader, tmp_path):
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"%PDF-1.4 garbage")
+    with pytest.raises(FileLoadError):
+        loader.load(str(path))

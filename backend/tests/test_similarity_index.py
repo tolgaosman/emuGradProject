@@ -1,5 +1,6 @@
 """ test_similarity_index.py — Turnitin-style per-document Similarity Index. """
 import pytest
+
 from src.preprocessor import Preprocessor
 from src.similarity_index import pairwise_matches, similarity_index, source_breakdown
 

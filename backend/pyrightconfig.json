@@ -1,21 +1,8 @@
 {
-  "venvPath": "plagcheck",
+  "venvPath": ".",
   "venv": "venv",
   "pythonVersion": "3.12",
   "pythonPlatform": "Windows",
   "typeCheckingMode": "basic",
-  "executionEnvironments": [
-    {
-      "root": "plagcheck",
-      "extraPaths": [
-        "plagcheck",
-        "plagcheck/src"
-      ]
-    }
-  ],
-  "extraPaths": [
-    "plagcheck",
-    "plagcheck/src"
-  ]
+  "extraPaths": ["."]
 }
-

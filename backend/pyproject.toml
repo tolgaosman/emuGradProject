@@ -1,7 +1,7 @@
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["plagcheck/venv", "web", "output", "samples"]
+extend-exclude = ["venv", "nltk_data", "output", "samples"]
 
 [tool.ruff.lint]
 select = [
@@ -22,29 +22,29 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D"]
-"plagcheck/plagcheck.py" = ["D"]
-"plagcheck/app.py" = ["D"]
+"plagcheck.py" = ["D"]
+"app.py" = ["D"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-ra --cov=plagcheck/src --cov-report=term-missing --cov-fail-under=90"
+addopts = "-ra --cov=src --cov-report=term-missing --cov-fail-under=90"
 
 [tool.coverage.run]
-source = ["plagcheck/src"]
+source = ["src"]
 
 [tool.pyrefly]
-python-interpreter-path = "plagcheck/venv/Scripts/python.exe"
+python-interpreter-path = "venv/Scripts/python.exe"
 python-version = "3.12"
 python-platform = "win32"
-search-path = ["plagcheck", "plagcheck/src"]
+search-path = ["."]
 project-excludes = [
-    "**/plagcheck/venv/**",
+    "**/venv/**",
     "**/node_modules/**",
     "**/__pycache__/**",
-    "**/web/**",
+    "**/nltk_data/**",
     "**/output/**",
     "**/samples/**",
 ]

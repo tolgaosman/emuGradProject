@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PLAGCHECK_DIR = Path(__file__).resolve().parent.parent / "plagcheck"
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples"
 
 
@@ -18,7 +18,7 @@ def test_plagcheck_module_imports_cleanly():
     renamed but the CLI's import wasn't updated."""
     result = subprocess.run(
         [sys.executable, "-c", "import plagcheck"],
-        cwd=str(PLAGCHECK_DIR),
+        cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
         timeout=30,
@@ -29,7 +29,7 @@ def test_plagcheck_module_imports_cleanly():
 def test_cli_help_runs():
     result = subprocess.run(
         [sys.executable, "plagcheck.py", "--help"],
-        cwd=str(PLAGCHECK_DIR),
+        cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
         timeout=30,
@@ -57,7 +57,7 @@ def test_cli_end_to_end_code_similarity(tmp_path):
             "--output",
             str(out_dir),
         ],
-        cwd=str(PLAGCHECK_DIR),
+        cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
         timeout=60,
@@ -84,7 +84,7 @@ def _run_cli(tmp_path, out_name: str, *extra_args: str):
             str(out_dir),
             *extra_args,
         ],
-        cwd=str(PLAGCHECK_DIR),
+        cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
         timeout=60,
@@ -148,10 +148,50 @@ def test_cli_exits_nonzero_when_no_file_is_valid(tmp_path):
             "--output",
             str(tmp_path / "cli_invalid"),
         ],
-        cwd=str(PLAGCHECK_DIR),
+        cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert result.returncode != 0
     assert "Need at least 1 valid file" in result.stdout
+
+
+def test_cli_version_flag():
+    result = subprocess.run(
+        [sys.executable, "plagcheck.py", "--version"],
+        cwd=str(BACKEND_DIR),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip().startswith("plagcheck ")
+
+
+def test_cli_expands_wildcards_and_short_flags(tmp_path):
+    """-f with a glob works even where the shell passes `*` through (Windows)."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "plagcheck.py",
+            "-f",
+            str(SAMPLES_DIR / "sample_code_*.py"),
+            "--mode",
+            "code_similarity",
+            "--threshold",
+            "0.4",
+            "--output",
+            str(tmp_path / "glob_out"),
+            "--quiet",
+            "--no-log",
+        ],
+        cwd=str(BACKEND_DIR),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "matched 5-grams" in result.stdout
+    assert "Loading" not in result.stdout  # --quiet
+    assert _flagged_scores(result.stdout)

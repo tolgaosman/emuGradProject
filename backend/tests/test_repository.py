@@ -2,6 +2,8 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.engine import ScanResult
 from src.matrix import ComparisonMatrix
 from src.repository import ScanRepository
@@ -200,3 +202,122 @@ def test_save_scan_falls_back_to_json_on_db_error(tmp_path, monkeypatch):
     record = repo.get_scan(scan_uuid)
     assert record is not None
     assert record["scan_uuid"] == scan_uuid
+
+
+def _uuid() -> str:
+    import uuid
+
+    return str(uuid.uuid4())
+
+
+def test_list_scans_summarizes_json_records(tmp_path, monkeypatch):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    monkeypatch.setattr(repo, "_get_connection", lambda: None)
+    scan_uuid = repo.save_scan("text_similarity", 0.5, _files_meta(), _result(), _uuid())
+    repo.save_texts(scan_uuid, {"a.txt": {"raw": "x", "language": "text"}}, 8)
+
+    scans = repo.list_scans()
+    assert len(scans) == 1  # the texts sidecar is not listed as a scan
+    assert scans[0]["scan_uuid"] == scan_uuid
+    assert scans[0]["file_names"] == ["a.txt", "b.txt", "c.txt"]
+    assert scans[0]["max_score"] == pytest.approx(0.9)
+    assert scans[0]["flagged_count"] == 1
+    assert scans[0]["mode"] == "text_similarity"
+
+
+def test_delete_scan_removes_record_and_texts(tmp_path, monkeypatch):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    monkeypatch.setattr(repo, "_get_connection", lambda: None)
+    scan_uuid = repo.save_scan("text_similarity", 0.5, _files_meta(), _result(), _uuid())
+    repo.save_texts(scan_uuid, {}, 8)
+
+    assert repo.delete_scan(scan_uuid) is True
+    assert repo.get_scan(scan_uuid) is None
+    assert repo.load_texts(scan_uuid) is None
+    assert repo.delete_scan(scan_uuid) is False
+    assert repo.delete_scan("../../etc/passwd") is False
+
+
+def test_purge_expired_removes_old_files_only(tmp_path, monkeypatch):
+    import os
+    import time
+
+    repo = ScanRepository(json_dir=str(tmp_path))
+    monkeypatch.setattr(repo, "_get_connection", lambda: None)
+    old = repo.save_scan("text_similarity", 0.5, _files_meta(), _result(), _uuid())
+    new = repo.save_scan("text_similarity", 0.5, _files_meta(), _result(), _uuid())
+    stale = time.time() - 100 * 86_400
+    os.utime(repo._json_path(old), (stale, stale))
+
+    assert repo.purge_expired(days=90) == 1
+    assert repo.get_scan(old) is None
+    assert repo.get_scan(new) is not None
+
+
+def test_retention_days_env_is_validated(tmp_path, monkeypatch):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    monkeypatch.setattr(repo, "_get_connection", lambda: None)
+    monkeypatch.setenv("RETENTION_DAYS", "soon")
+    assert repo.purge_expired() == 0
+
+
+def test_load_json_rejects_non_uuid_ids(tmp_path, monkeypatch):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    monkeypatch.setattr(repo, "_get_connection", lambda: None)
+    (tmp_path / "secret.json").write_text('{"scan_uuid": "secret"}', encoding="utf-8")
+    assert repo.get_scan("secret") is None
+    assert repo.get_scan(r"..\secret") is None
+
+
+def test_storage_backend_reports_json_when_db_down(tmp_path, monkeypatch):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    monkeypatch.setattr(repo, "_get_connection", lambda: None)
+    assert repo.storage_backend() == "json"
+
+
+def test_storage_backend_probe_is_cached(monkeypatch):
+    repo = ScanRepository()
+    calls = []
+
+    def connect():
+        calls.append(1)
+        return MagicMock()
+
+    monkeypatch.setattr(repo, "_get_connection", connect)
+    assert repo.storage_backend() == "postgres"
+    assert repo.storage_backend() == "postgres"
+    assert len(calls) == 1
+
+
+def test_list_db_maps_rows(monkeypatch, tmp_path):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    fake_cursor = MagicMock()
+    fake_cursor.fetchall.return_value = [
+        ("0f0e0d0c-0000-4000-8000-000000000001", datetime(2026, 1, 1), 0.7,
+         ["a.txt", "b.txt"], 0.91, 1, "code_similarity"),
+    ]
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+    monkeypatch.setattr(repo, "_get_connection", lambda: fake_conn)
+
+    scans = repo.list_scans()
+    assert scans == [{
+        "scan_uuid": "0f0e0d0c-0000-4000-8000-000000000001",
+        "timestamp": "2026-01-01T00:00:00",
+        "mode": "code_similarity",
+        "threshold": 0.7,
+        "file_names": ["a.txt", "b.txt"],
+        "max_score": 0.91,
+        "flagged_count": 1,
+    }]
+
+
+def test_db_delete_reports_rowcount(monkeypatch, tmp_path):
+    repo = ScanRepository(json_dir=str(tmp_path))
+    fake_cursor = MagicMock()
+    fake_cursor.rowcount = 1
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+    monkeypatch.setattr(repo, "_get_connection", lambda: fake_conn)
+    assert repo.delete_scan(_uuid()) is True
+    fake_conn.commit.assert_called_once()

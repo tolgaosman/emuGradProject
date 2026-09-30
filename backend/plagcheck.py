@@ -1,10 +1,13 @@
 """ plagcheck.py — CLI entry point. """
 import argparse
+import glob
+import logging
 import os
 import sys
 import uuid
 
 from dotenv import load_dotenv
+
 from src.audit import AuditLogger
 from src.engine import ALGORITHMS_BY_MODE, ScanEngine
 from src.language import MODES, language_for_extension
@@ -15,6 +18,8 @@ from src.repository import ScanRepository
 from src.similarity_index import DEFAULT_MIN_MATCH_WORDS
 
 load_dotenv()
+
+VERSION = "1.1.0"
 
 #: `--algorithm` is documented in the graduation report alongside `--mode`.
 #: Each value both selects the mode it belongs to (AST only makes sense for
@@ -60,10 +65,38 @@ def _resolve_algorithm(args, mode: str) -> str:
     return args.algorithm
 
 
+class _NullAudit:
+    """Stand-in for `AuditLogger` under `--no-log`."""
+
+    def log(self, *_args, **_kwargs) -> None:
+        return None
+
+
+def _expand_paths(patterns: list[str]) -> list[str]:
+    """Expand wildcards ourselves: Windows shells pass `*.py` through literally.
+
+    A pattern that matches nothing is kept as-is, so the loader reports it as
+    a missing file instead of it vanishing silently.
+    """
+    paths: list[str] = []
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern)) if glob.has_magic(pattern) else []
+        paths.extend(matches or [pattern])
+    return paths
+
+
 def main():
     """Parse CLI args, run a scan over --files, and write report artifacts."""
-    parser = argparse.ArgumentParser(description="Plagiarism and Similarity Detection")
-    parser.add_argument("--files", nargs="+", required=True, help="List of file paths to scan")
+    parser = argparse.ArgumentParser(
+        prog="plagcheck", description="Plagiarism and Similarity Detection (offline)"
+    )
+    parser.add_argument(
+        "-f",
+        "--files",
+        nargs="+",
+        required=True,
+        help="Files to scan; wildcards such as docs/*.pdf are expanded",
+    )
     parser.add_argument(
         "--mode",
         choices=sorted(MODES),
@@ -71,6 +104,7 @@ def main():
         help="Scanning mode (default: text_similarity, or DEFAULT_MODE env var)",
     )
     parser.add_argument(
+        "-a",
         "--algorithm",
         choices=sorted(_ALGORITHM_TO_MODE),
         default=None,
@@ -104,7 +138,18 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="Only print errors and flagged pairs"
+    )
+    parser.add_argument(
+        "--no-log", action="store_true", help="Do not write audit events for this run"
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+
     args = parser.parse_args()
+    logging.basicConfig(level=logging.WARNING if args.quiet else logging.INFO)
+    say = (lambda *_a, **_k: None) if args.quiet else print
+    args.files = _expand_paths(args.files)
     mode = _resolve_mode(args)
     algorithm = _resolve_algorithm(args, mode)
 
@@ -117,8 +162,17 @@ def main():
         return 1
 
     scan_uuid = str(uuid.uuid4())
-    audit = AuditLogger()
-    audit.log("SCAN_START", scan_uuid=scan_uuid, payload={"files": args.files, "mode": mode})
+    audit = _NullAudit() if args.no_log else AuditLogger()
+    audit.log(
+        "SCAN_START",
+        scan_uuid=scan_uuid,
+        payload={
+            "files": [os.path.basename(f) for f in args.files],
+            "mode": mode,
+            "algorithm": algorithm,
+            "threshold": args.threshold,
+        },
+    )
 
     loader = FileLoader()
     preprocessor = Preprocessor(exclusions_path=args.exclusions)
@@ -126,7 +180,7 @@ def main():
     files_meta = []
     name_counts: dict[str, int] = {}
 
-    print(f"Loading {len(args.files)} files for mode '{mode}'...")
+    say(f"Loading {len(args.files)} files for mode '{mode}'...")
     for raw_path in args.files:
         # Resolve to an absolute path first. The loader rejects '..' as a path
         # component to stop traversal from untrusted API input, but a CLI
@@ -173,17 +227,22 @@ def main():
         print(f"Error: Need at least 1 valid file for mode '{mode}'.")
         return 1
 
-    print(f"Running '{mode}' (algorithm: {algorithm})...")
+    say(f"Running '{mode}' (algorithm: {algorithm})...")
     engine = ScanEngine(mode=mode, algorithm=algorithm)
     result = engine.compute(
         file_data, preprocessor=preprocessor, min_match_words=args.min_match_words
     )
 
-    ScanRepository().save_scan(mode, args.threshold, files_meta, result, scan_uuid)
+    ScanRepository().save_scan(
+        mode, args.threshold, files_meta, result, scan_uuid, min_match_words=args.min_match_words
+    )
+    pairs = result.pairs(args.threshold)
 
     os.makedirs(args.output, exist_ok=True)
 
-    assert result.matrix is not None  # guaranteed by ScanEngine.compute
+    if result.matrix is None:
+        print("Error: the scan produced no similarity matrix.")
+        return 1
     reporter = ReportGenerator()
     artifacts = reporter.generate(
         result.matrix,
@@ -193,23 +252,37 @@ def main():
         preprocessor=preprocessor,
         min_match_words=args.min_match_words,
         formats=args.format,
+        pairs=pairs,
+        algorithm=algorithm,
     )
-    flagged = result.matrix.get_flagged(args.threshold)
-    flagged_count = len(flagged)
+    flagged = [p for p in pairs if p["flagged"]]
 
-    print(f"\nScan complete. Flagged pairs (>= {args.threshold}):")
+    print(f"\nScan complete. Flagged for review (>= {args.threshold}):")
     if not flagged:
         print("  None")
-    else:
-        for f in flagged:
-            print(f"  {f['file_a']} <-> {f['file_b']} : {f['score']:.4f}")
+    for p in flagged:
+        print(
+            f"  {p['file_a']} <-> {p['file_b']}  ({p['matched_kgrams']} matched 5-grams)"
+            f" : {p['score']:.4f}"
+        )
 
-    print(f"\nArtifacts generated in '{args.output}':")
+    say(f"\nArtifacts generated in '{args.output}':")
     for key in ("csv", "html", "heatmap"):
         if key in artifacts:
-            print(f"  - {artifacts[key]}")
+            say(f"  - {artifacts[key]}")
 
-    audit.log("SCAN_COMPLETE", scan_uuid=scan_uuid, payload={"flagged_count": flagged_count})
+    audit.log(
+        "SCAN_COMPLETE",
+        scan_uuid=scan_uuid,
+        payload={
+            "files": list(file_data),
+            "mode": mode,
+            "algorithm": algorithm,
+            "threshold": args.threshold,
+            "max_score": max((p["score"] for p in pairs), default=0.0),
+            "flagged_count": len(flagged),
+        },
+    )
     return 0
 
 

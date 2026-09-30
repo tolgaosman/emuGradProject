@@ -7,38 +7,143 @@ import type {
   DetectLanguageResponse,
   Mode,
   PairResponse,
+  ReportResponse,
+  ScanHistoryEntry,
   StatusResponse,
 } from './types'
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+
+/** The server could not be reached at all (stopped, or a network failure). */
+export class NetworkError extends Error {
+  constructor() {
+    super('Could not reach the PlagCheck server.')
+    this.name = 'NetworkError'
+  }
+}
+
+function isErrorBody(body: unknown): body is ApiErrorBody {
+  return typeof body === 'object' && body !== null && 'code' in body && 'error' in body
+}
+
+/** Parse a JSON response, turning the `{error, code}` envelope into `ApiError`.
+ * A non-JSON body (a proxy's HTML 502, say) becomes a plain, readable error
+ * instead of a `SyntaxError` leaking into the UI. */
 async function parseJsonOrThrow<T>(res: Response): Promise<T> {
-  const body = await res.json()
-  if (!res.ok) throw new ApiError(body as ApiErrorBody)
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    throw new Error(`The server answered with an unexpected response (HTTP ${res.status}).`)
+  }
+  if (!res.ok) {
+    throw isErrorBody(body) ? new ApiError(body) : new Error(`Request failed (HTTP ${res.status}).`)
+  }
   return body as T
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
-
-/** Algorithm choices selectable per mode, for the ALGORITHM chip row. */
-export async function getAlgorithms(): Promise<AlgorithmsResponse> {
-  const res = await fetch(`${API_BASE}/api/algorithms`)
-  return parseJsonOrThrow<AlgorithmsResponse>(res)
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, init)
+  } catch {
+    throw new NetworkError()
+  }
+  return parseJsonOrThrow<T>(res)
 }
 
-/** Liveness check, for the top bar's "System Ready" indicator. */
-export async function getStatus(): Promise<StatusResponse> {
-  const res = await fetch(`${API_BASE}/api/status`)
-  return parseJsonOrThrow<StatusResponse>(res)
-}
+const reportPath = (scanId: string) => `/api/report/${encodeURIComponent(scanId)}`
 
-/** Guess the language of a pasted code snippet, for the paste-box UI in
- * code_similarity mode. */
-export async function detectLanguage(text: string): Promise<DetectLanguageResponse> {
-  const res = await fetch(`${API_BASE}/api/detect-language`, {
+const pairPath = (kind: 'pair' | 'pair-pdf', scanId: string, fileA: string, fileB: string) =>
+  `${reportPath(scanId)}/${kind}/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}`
+
+export const getAlgorithms = () => request<AlgorithmsResponse>('/api/algorithms')
+
+export const getStatus = () => request<StatusResponse>('/api/status')
+
+export const listScans = (limit = 30) =>
+  request<{ scans: ScanHistoryEntry[] }>(`/api/scans?limit=${limit}`).then((r) => r.scans)
+
+/** Guess the language of a pasted code snippet (Python/Java/C/C++). */
+export const detectLanguage = (text: string) =>
+  request<DetectLanguageResponse>('/api/detect-language', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
   })
-  return parseJsonOrThrow<DetectLanguageResponse>(res)
+
+/** Both files' text plus the matched-span offsets to highlight. The span
+ * filter defaults server-side to the scan's own `min_match_words`, so the
+ * highlighting always matches the score being displayed. */
+export const getPair = (scanId: string, fileA: string, fileB: string) =>
+  request<PairResponse>(pairPath('pair', scanId, fileA, fileB))
+
+/** Reopen a stored scan in the same shape a fresh `/api/check` returns. */
+export async function getReport(scanId: string): Promise<CheckResponse> {
+  const report = await request<ReportResponse>(reportPath(scanId))
+  return {
+    scan_id: report.scan_id,
+    mode: report.mode,
+    algorithm: report.algorithm_override,
+    threshold: report.threshold,
+    min_match_words: report.min_match_words,
+    matrix: report.matrix,
+    pairs: report.pairs,
+    similarity_indices: report.similarity_indices,
+    source_breakdowns: report.source_breakdowns,
+    errors: [],
+  }
+}
+
+export async function deleteScan(scanId: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${reportPath(scanId)}`, { method: 'DELETE' })
+  } catch {
+    throw new NetworkError()
+  }
+  if (!res.ok) await parseJsonOrThrow(res)
+}
+
+export const exportUrls = {
+  heatmap: (scanId: string, ref?: string) =>
+    `${API_BASE}${reportPath(scanId)}/heatmap.png?ref=${encodeURIComponent(ref ?? 'all')}`,
+  csv: (scanId: string) => `${API_BASE}${reportPath(scanId)}/matrix.csv`,
+  html: (scanId: string) => `${API_BASE}${reportPath(scanId)}/report.html`,
+  pairPdf: (scanId: string, fileA: string, fileB: string) =>
+    `${API_BASE}${pairPath('pair-pdf', scanId, fileA, fileB)}`,
+}
+
+function filenameFrom(disposition: string | null): string | null {
+  if (!disposition) return null
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (encoded) return decodeURIComponent(encoded[1])
+  const plain = /filename="([^"]+)"/i.exec(disposition)
+  return plain ? plain[1] : null
+}
+
+/** Fetch an export and save it. Going through `fetch` (not a bare
+ * `<a download>`) means a missing or expired scan surfaces as an error the
+ * UI can show, rather than silently saving a JSON error body as a file. */
+export async function downloadFile(url: string, fallbackName: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(url)
+  } catch {
+    throw new NetworkError()
+  }
+  if (!res.ok) await parseJsonOrThrow(res)
+
+  const blob = await res.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filenameFrom(res.headers.get('Content-Disposition')) ?? fallbackName
+  document.body.append(link)
+  link.click()
+  link.remove()
+  // Revoke on the next task: some browsers start the download asynchronously.
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
 
 export interface CheckOptions {
@@ -68,7 +173,7 @@ export class AbortedError extends Error {
 }
 
 /** Upload files and run a scan. Uses XHR (not fetch) so upload progress can
- * be reported to the caller for the drop zone's progress bar. */
+ * be reported to the caller for the progress bar. */
 export function runCheck(opts: CheckOptions): RunningCheck {
   const { files, mode, threshold, algorithm, minMatchWords, onProgress } = opts
 
@@ -93,61 +198,22 @@ export function runCheck(opts: CheckOptions): RunningCheck {
       try {
         body = JSON.parse(xhr.responseText)
       } catch {
-        reject(new Error('Server returned an invalid response.'))
+        reject(new Error(`The server answered with an unexpected response (HTTP ${xhr.status}).`))
         return
       }
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(body as CheckResponse)
+      } else if (isErrorBody(body)) {
+        reject(new ApiError(body))
       } else {
-        reject(new ApiError(body as ApiErrorBody))
+        reject(new Error(`Scan failed (HTTP ${xhr.status}).`))
       }
     }
 
     xhr.onabort = () => reject(new AbortedError())
-    xhr.onerror = () => reject(new Error('Network error — is the PlagCheck API running?'))
+    xhr.onerror = () => reject(new NetworkError())
     xhr.send(form)
   })
 
   return { promise, abort: () => xhr.abort() }
-}
-
-/** Both files' text plus the matched-span offsets to highlight.
- *
- * `minMatchWords` defaults server-side to whatever the scan was run with, so
- * the highlighting matches the score being displayed; pass it only to
- * explore a different threshold.
- */
-export async function getPair(
-  scanId: string,
-  fileA: string,
-  fileB: string,
-  minMatchWords?: number,
-): Promise<PairResponse> {
-  const query = minMatchWords === undefined ? '' : `?min_match_words=${minMatchWords}`
-  const res = await fetch(
-    `${API_BASE}/api/report/${encodeURIComponent(scanId)}/pair/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}${query}`,
-  )
-  return parseJsonOrThrow<PairResponse>(res)
-}
-
-/** Server-rendered PDF of one comparison, with both documents reproduced in
- * full and the matched regions highlighted — the printable form of what
- * `ComparisonInspector` shows on screen.
- *
- * Like `getPair`, `minMatchWords` defaults server-side to the scan's own
- * value so the PDF can't highlight more than the score counted. */
-export function pairPdfUrl(
-  scanId: string,
-  fileA: string,
-  fileB: string,
-  minMatchWords?: number,
-): string {
-  const query = minMatchWords === undefined ? '' : `?min_match_words=${minMatchWords}`
-  return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/pair-pdf/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}${query}`
-}
-
-/** Server-rendered 300 DPI heatmap, for downloading the scan as an image. */
-export function heatmapUrl(scanId: string, ref?: string): string {
-  const query = ref ? `?ref=${encodeURIComponent(ref)}` : ''
-  return `${API_BASE}/api/report/${encodeURIComponent(scanId)}/heatmap.png${query}`
 }

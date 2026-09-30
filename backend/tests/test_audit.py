@@ -27,12 +27,21 @@ def test_fallback_log_written_when_db_unavailable(monkeypatch, tmp_path):
     assert "SCAN_START" in content
 
 
-def test_real_fallback_writes_to_disk(monkeypatch):
+def test_real_fallback_writes_to_disk(monkeypatch, tmp_path):
     """Exercise the real _fallback_log path to ensure it does not raise."""
-    audit = AuditLogger()
+    log_path = tmp_path / "audit.log"
+    audit = AuditLogger(log_path=str(log_path))
     monkeypatch.setattr(audit, "_get_connection", lambda: None)
     # Should not raise even though no DB is configured.
     audit.log("UNIT_TEST_EVENT", payload={"k": "v"})
+    assert "UNIT_TEST_EVENT" in log_path.read_text(encoding="utf-8")
+
+
+def test_fallback_write_failure_never_raises(monkeypatch, tmp_path):
+    """An unwritable fallback log is reported, not raised into the scan."""
+    audit = AuditLogger(log_path=str(tmp_path / "missing_dir" / "audit.log"))
+    monkeypatch.setattr(audit, "_get_connection", lambda: None)
+    audit.log("SCAN_START", payload={"files": ["a.txt"]})
 
 
 def test_log_writes_to_db_when_available(monkeypatch):

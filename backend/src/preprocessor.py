@@ -1,15 +1,27 @@
 """ preprocessor.py — NLP Preprocessor. """
 import io
+import logging
 import os
 import re
 import tokenize as py_tokenize
 from tokenize import TokenError
 
+import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 
 from .language import strip_comments_and_strings
+
+logger = logging.getLogger(__name__)
+
+_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+#: NLTK data (English stopwords + punkt_tab) ships with the repo so the
+#: pipeline never reaches the network — the project is local-execution only.
+NLTK_DATA_DIR = os.path.join(_BACKEND_DIR, "nltk_data")
+if NLTK_DATA_DIR not in nltk.data.path:
+    nltk.data.path.insert(0, NLTK_DATA_DIR)
 
 # Token types worth keeping when tokenizing Python source: identifiers,
 # keywords, and literals. Comments, whitespace, and punctuation carry no
@@ -24,12 +36,21 @@ _GENERIC_CODE_LANGUAGES = {"java", "c", "cpp"}
 #: string literals have been stripped via `language.strip_comments_and_strings`.
 _CODE_TOKEN_RE = re.compile(r"[A-Za-z_]\w*|\d+\.\d+|\d+")
 
-# Default location of the academic exclusion list. The CLI is launched from
-# inside plagcheck/, so config/ lives one directory above the package root:
-#   <repo_root>/config/exclusions.txt  ==  <this file>/../../config/exclusions.txt
-_DEFAULT_EXCLUSIONS = os.path.join(
-    os.path.dirname(__file__), "..", "..", "config", "exclusions.txt"
-)
+#: Academic / template term exclusion list (FR-15), `backend/config/`.
+_DEFAULT_EXCLUSIONS = os.path.join(_BACKEND_DIR, "config", "exclusions.txt")
+
+
+def _english_stopwords() -> set[str]:
+    """Return NLTK's English stopword list, or an empty set if it is missing.
+
+    Never downloads: a missing corpus degrades filtering, it doesn't fail the
+    scan or reach the network.
+    """
+    try:
+        return set(stopwords.words("english"))
+    except LookupError:
+        logger.warning("NLTK stopwords not found under %s; stopword removal is off.", NLTK_DATA_DIR)
+        return set()
 
 
 class Preprocessor:
@@ -40,32 +61,36 @@ class Preprocessor:
     """
 
     def __init__(self, k: int = 5, exclusions_path: str | None = None):
-        """Build the stemmed stopword set (NLTK + `config/exclusions.txt`)."""
+        """Build the stemmed stopword set and the stemmed exclusion set."""
         self.k = k
         self.stemmer = PorterStemmer()
+        # Tokens are stemmed before they are compared against these sets, so
+        # the sets must be stemmed too for the comparison to match.
+        self.stop_words = {self.stemmer.stem(w) for w in _english_stopwords()}
+        self.exclusions = self._load_exclusions(exclusions_path)
 
-        try:
-            raw_stopwords = set(stopwords.words("english"))
-        except LookupError:
-            import nltk
-            nltk.download("punkt")
-            nltk.download("stopwords")
-            raw_stopwords = set(stopwords.words("english"))
+    def is_filtered(self, stemmed: str, language: str = "text") -> bool:
+        """Whether a stemmed token is dropped from similarity computation.
 
-        # Tokens are stemmed before they are compared against the stopword set,
-        # so the stopword set must be stemmed too for the comparison to match.
-        self.stop_words = {self.stemmer.stem(w) for w in raw_stopwords}
-
-        # Merge in the academic / template exclusion terms (also stemmed).
-        self.stop_words |= self._load_exclusions(exclusions_path)
+        Stopwords apply everywhere. The exclusion list holds academic
+        boilerplate ("abstract", "method", "result", ...) and applies to
+        prose only — in source code those same words are ordinary
+        identifiers, and dropping them would erase real structure. Span
+        matching (`reporter._spanned_tokens`) uses this same predicate so
+        highlighting and scoring always agree.
+        """
+        if stemmed in self.stop_words:
+            return True
+        return language == "text" and stemmed in self.exclusions
 
     def _load_exclusions(self, exclusions_path: str | None) -> set[str]:
         path = (
             exclusions_path
             or os.environ.get("EXCLUSIONS_PATH")
+            or os.environ.get("EXCLUSION_LIST_PATH")
             or _DEFAULT_EXCLUSIONS
         )
-        if not path or not os.path.isfile(path):
+        if not os.path.isfile(path):
             return set()
 
         terms: set[str] = set()
@@ -106,7 +131,7 @@ class Preprocessor:
         tokens = [
             stemmed
             for t in raw_tokens
-            if (stemmed := self.stemmer.stem(t)) not in self.stop_words
+            if not self.is_filtered(stemmed := self.stemmer.stem(t), language)
         ]
 
         kgrams = []
@@ -124,11 +149,10 @@ class Preprocessor:
         try:
             return word_tokenize(text)
         except LookupError:
-            import nltk
-
-            nltk.download("punkt")
-            nltk.download("punkt_tab")
-            return word_tokenize(text)
+            # Punctuation is already stripped, so whitespace splitting yields
+            # the same tokens punkt would; it just can't be as clever.
+            logger.warning("NLTK punkt_tab not found under %s; splitting on spaces.", NLTK_DATA_DIR)
+            return text.split()
 
     def _tokenize_code(self, text: str, language: str) -> list[str] | None:
         """Tokenize Java/C/C++ source into lowercased identifier/number tokens.

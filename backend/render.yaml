@@ -2,8 +2,8 @@ services:
   - type: web
     name: emugradproject-api
     env: python
-    buildCommand: pip install -r plagcheck/requirements.txt
-    startCommand: gunicorn --chdir plagcheck app:app
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: gunicorn --chdir backend --timeout 120 app:app
     envVars:
       - key: CORS_ORIGIN
         value: https://tolgaosman.github.io

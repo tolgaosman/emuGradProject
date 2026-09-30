@@ -5,49 +5,77 @@ transaction. When PostgreSQL is unreachable, falls back to a JSON file per
 scan under `output/scans/`, mirroring the offline fallback pattern in
 `audit.py`. `get_scan` reads DB-first, then the JSON fallback, so a report
 stays retrievable across process restarts either way.
+
+Raw document text is kept apart from the record, in a `<uuid>_texts.json`
+sidecar next to the JSON records: it is working data for the comparison
+view, not a durable relational fact. Both expire after `RETENTION_DAYS`
+(report §3.3.4: metadata is kept for 90 days, then purged).
 """
+import glob
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime
 
-import psycopg2
-
+from . import db
 from .engine import ScanResult
 from .language import MODES
 
 _SYSTEM_USER_EMAIL = "system@plagcheck.local"
 _JSON_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "output", "scans"))
+_TEXTS_SUFFIX = "_texts.json"
+#: How long a `storage_backend()` probe is trusted. The UI polls status every
+#: few seconds; without this each poll would open (or time out) a DB socket.
+_STORAGE_PROBE_TTL_S = 30.0
+
+DEFAULT_RETENTION_DAYS = 90
 
 logger = logging.getLogger(__name__)
+
+
+def is_scan_uuid(value: str) -> bool:
+    """Whether `value` is a canonical UUID string (the only valid scan id)."""
+    try:
+        return str(uuid.UUID(value)) == value.lower()
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def _timestamp_key(value: str | None) -> float:
+    """Sortable epoch seconds for a stored ISO timestamp (naive = local time)."""
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(value).astimezone().timestamp()
+    except ValueError:
+        return 0.0
 
 
 class ScanRepository:
     """Persists and retrieves scan results across the relational schema."""
 
     def __init__(self, json_dir: str = _JSON_DIR):
-        """Read DB connection parameters from the environment."""
-        self.db_host = os.environ.get("DB_HOST", "localhost")
-        self.db_name = os.environ.get("DB_NAME", "plagcheck_db")
-        self.db_user = os.environ.get("DB_USER", "plagcheck_user")
-        self.db_pass = os.environ.get("DB_PASS", "password")
-        self.db_port = os.environ.get("DB_PORT", "5432")
+        """Set the JSON fallback directory (records and raw-text sidecars)."""
         self.json_dir = json_dir
+        self._storage_probe: tuple[float, str] | None = None
 
     def _get_connection(self):
         """Return a new DB connection, or None if the DB is unreachable."""
-        try:
-            return psycopg2.connect(
-                host=self.db_host,
-                database=self.db_name,
-                user=self.db_user,
-                password=self.db_pass,
-                port=self.db_port,
-                connect_timeout=2,
-            )
-        except Exception:
-            return None
+        return db.connect()
+
+    def storage_backend(self) -> str:
+        """Report where new scans are persisted: `postgres` or `json`."""
+        now = time.monotonic()
+        if self._storage_probe and now - self._storage_probe[0] < _STORAGE_PROBE_TTL_S:
+            return self._storage_probe[1]
+        conn = self._get_connection()
+        backend = "postgres" if conn else "json"
+        if conn:
+            conn.close()
+        self._storage_probe = (now, backend)
+        return backend
 
     def save_scan(
         self,
@@ -56,6 +84,7 @@ class ScanRepository:
         files_meta: list[dict],
         result: ScanResult,
         scan_uuid: str | None = None,
+        min_match_words: int | None = None,
     ) -> str:
         """Persist a completed scan and return its public scan_uuid.
 
@@ -67,7 +96,9 @@ class ScanRepository:
         otherwise look identical to a successful relational write.
         """
         scan_uuid = scan_uuid or str(uuid.uuid4())
-        record = self._build_record(scan_uuid, mode, threshold, files_meta, result)
+        record = self._build_record(
+            scan_uuid, mode, threshold, files_meta, result, min_match_words
+        )
 
         conn = self._get_connection()
         if conn:
@@ -100,6 +131,122 @@ class ScanRepository:
                 conn.close()
         return self._load_json(scan_uuid)
 
+    def list_scans(self, limit: int = 20) -> list[dict]:
+        """Summaries of the most recent scans, newest first, across DB and JSON.
+
+        Expired scans are purged first, so history never offers a report whose
+        comparison text is already gone.
+        """
+        self.purge_expired()
+        summaries: dict[str, dict] = {}
+        conn = self._get_connection()
+        if conn:
+            try:
+                for summary in self._list_db(conn, limit):
+                    summaries[summary["scan_uuid"]] = summary
+            except Exception:
+                logger.exception("DB scan listing failed — using JSON records only")
+            finally:
+                conn.close()
+        for summary in self._list_json(limit):
+            summaries.setdefault(summary["scan_uuid"], summary)
+        ordered = sorted(
+            summaries.values(), key=lambda s: _timestamp_key(s["timestamp"]), reverse=True
+        )
+        return ordered[:limit]
+
+    def delete_scan(self, scan_uuid: str) -> bool:
+        """Delete a scan's record and raw text everywhere; True if anything existed."""
+        if not is_scan_uuid(scan_uuid):
+            return False
+        deleted = False
+        conn = self._get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM scan_request WHERE scan_uuid = %s", (scan_uuid,))
+                    deleted = cur.rowcount > 0
+                conn.commit()
+            except Exception:
+                logger.exception("DB delete failed for scan %s", scan_uuid)
+                conn.rollback()
+            finally:
+                conn.close()
+        for path in (self._json_path(scan_uuid), self._texts_path(scan_uuid)):
+            if os.path.isfile(path):
+                os.remove(path)
+                deleted = True
+        return deleted
+
+    def purge_expired(self, days: int | None = None) -> int:
+        """Delete scans older than the retention window; return how many files went.
+
+        `days` defaults to the `RETENTION_DAYS` environment variable (90).
+        JSON records and sidecars are aged by file modification time.
+        """
+        if days is None:
+            try:
+                days = int(os.environ.get("RETENTION_DAYS", DEFAULT_RETENTION_DAYS))
+            except ValueError:
+                days = DEFAULT_RETENTION_DAYS
+        cutoff = time.time() - days * 86_400
+
+        conn = self._get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM scan_request "
+                        "WHERE scan_timestamp < NOW() - make_interval(days => %s)",
+                        (days,),
+                    )
+                conn.commit()
+            except Exception:
+                logger.exception("DB retention purge failed")
+                conn.rollback()
+            finally:
+                conn.close()
+
+        removed = 0
+        for path in glob.glob(os.path.join(self.json_dir, "*.json")):
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                logger.warning("Could not purge expired scan file %s", path, exc_info=True)
+        return removed
+
+    def save_texts(self, scan_uuid: str, texts: dict, min_match_words: int) -> None:
+        """Persist raw text + language per file, for the pair-comparison view.
+
+        `texts` is `{name: {"raw": str, "language": str}}`. The scan's
+        `min_match_words` rides along so the pair view can filter spans
+        exactly as the scan scored them.
+        """
+        os.makedirs(self.json_dir, exist_ok=True)
+        payload = {"min_match_words": min_match_words, "files": texts}
+        with open(self._texts_path(scan_uuid), "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+    def load_texts(self, scan_uuid: str) -> tuple[dict, int] | None:
+        """Return `(texts_by_name, min_match_words)`, or None if unavailable.
+
+        A truncated or unreadable sidecar means the comparison simply isn't
+        available — not a fault worth raising.
+        """
+        if not is_scan_uuid(scan_uuid):
+            return None
+        path = self._texts_path(scan_uuid)
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload.get("files", {}), int(payload.get("min_match_words", 0))
+
     # -- record construction -------------------------------------------------
 
     def _build_record(
@@ -109,25 +256,24 @@ class ScanRepository:
         threshold: float,
         files_meta: list[dict],
         result: ScanResult,
+        min_match_words: int | None = None,
     ) -> dict:
-        pairs = [
-            {**pair, "flagged": pair["score"] >= threshold}
-            for pair in (result.matrix.all_pairs() if result.matrix else [])
-        ]
         files = [
             {**f, "similarity_index": result.similarity_indices.get(f["file_name"])}
             for f in files_meta
         ]
-
         return {
             "scan_uuid": scan_uuid,
+            # `algorithm` historically holds the mode; `mode` says so plainly.
             "algorithm": mode,
+            "mode": mode,
             "algorithm_override": result.algorithm,
             "threshold": threshold,
+            "min_match_words": min_match_words,
             "status": "complete",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "files": files,
-            "pairs": pairs,
+            "pairs": result.pairs(threshold),
             "source_breakdowns": result.source_breakdowns,
         }
 
@@ -199,6 +345,33 @@ class ScanRepository:
                     (scan_id, id_a, id_b, pair["score"], pair["flagged"]),
                 )
 
+    def _list_db(self, conn, limit: int) -> list[dict]:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT r.scan_uuid::text, r.scan_timestamp, r.threshold, "
+                "(SELECT array_agg(f.file_name ORDER BY f.file_id) FROM scan_file f "
+                " WHERE f.scan_id = r.scan_id), "
+                "(SELECT MAX(p.similarity_score) FROM scan_pair p WHERE p.scan_id = r.scan_id), "
+                "(SELECT COUNT(*) FROM scan_pair p WHERE p.scan_id = r.scan_id AND p.flagged), "
+                "(SELECT a.algorithm_name FROM scan_algorithm a WHERE a.scan_id = r.scan_id "
+                " AND a.algorithm_name = ANY(%s) LIMIT 1) "
+                "FROM scan_request r ORDER BY r.scan_timestamp DESC LIMIT %s",
+                (sorted(MODES), limit),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "scan_uuid": scan_uuid,
+                "timestamp": timestamp.isoformat(),
+                "mode": mode or "text_similarity",
+                "threshold": threshold,
+                "file_names": list(names or []),
+                "max_score": float(max_score) if max_score is not None else None,
+                "flagged_count": int(flagged),
+            }
+            for scan_uuid, timestamp, threshold, names, max_score, flagged, mode in rows
+        ]
+
     def _load_db(self, conn, scan_uuid: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute(
@@ -258,6 +431,7 @@ class ScanRepository:
         return {
             "scan_uuid": scan_uuid,
             "algorithm": algorithm,
+            "mode": algorithm,
             "algorithm_override": algorithm_override,
             "threshold": threshold,
             "status": status,
@@ -275,14 +449,54 @@ class ScanRepository:
     def _json_path(self, scan_uuid: str) -> str:
         return os.path.join(self.json_dir, f"{scan_uuid}.json")
 
+    def _texts_path(self, scan_uuid: str) -> str:
+        return os.path.join(self.json_dir, f"{scan_uuid}{_TEXTS_SUFFIX}")
+
     def _save_json(self, record: dict) -> None:
         os.makedirs(self.json_dir, exist_ok=True)
         with open(self._json_path(record["scan_uuid"]), "w", encoding="utf-8") as f:
             json.dump(record, f, indent=2)
 
     def _load_json(self, scan_uuid: str) -> dict | None:
+        # Only a canonical UUID may become a filename: anything else (a
+        # backslash, a drive letter, '..') could otherwise escape json_dir.
+        if not is_scan_uuid(scan_uuid):
+            return None
         path = self._json_path(scan_uuid)
         if not os.path.isfile(path):
             return None
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Unreadable scan record %s", path, exc_info=True)
+            return None
+
+    def _list_json(self, limit: int) -> list[dict]:
+        paths = [
+            p
+            for p in glob.glob(os.path.join(self.json_dir, "*.json"))
+            if not p.endswith(_TEXTS_SUFFIX)
+        ]
+        paths.sort(key=os.path.getmtime, reverse=True)
+        summaries = []
+        for path in paths[:limit]:
+            scan_uuid = os.path.splitext(os.path.basename(path))[0]
+            record = self._load_json(scan_uuid)
+            if record is not None:
+                summaries.append(_summarize(record))
+        return summaries
+
+
+def _summarize(record: dict) -> dict:
+    """Condense a full scan record into a history-list entry."""
+    pairs = record.get("pairs", [])
+    return {
+        "scan_uuid": record["scan_uuid"],
+        "timestamp": record.get("timestamp"),
+        "mode": record.get("mode") or record.get("algorithm"),
+        "threshold": record.get("threshold"),
+        "file_names": [f["file_name"] for f in record.get("files", [])],
+        "max_score": max((p["score"] for p in pairs), default=None),
+        "flagged_count": sum(1 for p in pairs if p.get("flagged")),
+    }

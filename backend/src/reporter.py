@@ -8,18 +8,16 @@ import re
 import tokenize as py_tokenize
 from tokenize import TokenError
 
-import fitz
 import matplotlib
+import pandas as pd
+import pymupdf
+import seaborn as sns
+from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import pandas as pd  # noqa: E402
-import seaborn as sns  # noqa: E402
-from matplotlib.patches import Rectangle  # noqa: E402
-
-from .language import CODE_LANGUAGES, blank_comments_and_strings  # noqa: E402
-from .matrix import ComparisonMatrix  # noqa: E402
-from .models.ast_model import _NormalizerNodeVisitor  # noqa: E402
+from .language import CODE_LANGUAGES, blank_comments_and_strings
+from .matrix import ComparisonMatrix
+from .models.ast_model import _NormalizerNodeVisitor
 
 _PY_KEEP_TYPES = {py_tokenize.NAME, py_tokenize.NUMBER, py_tokenize.STRING}
 #: Identifiers/keywords and numeric literals for the non-Python code
@@ -35,6 +33,24 @@ _KGRAM_K = 5
 #: so minified input would lose text without this. Sized to the A4 content
 #: width at the 7.5pt monospace face used in `_PDF_CSS`.
 _PDF_WRAP_COLS = 100
+#: Heatmaps are rendered at 300 DPI (FR-07) but never wider than this many
+#: inches: a 50-file batch at one inch per cell would be a ~225-megapixel PNG,
+#: which is both unreadable and an easy way to exhaust server memory.
+_HEATMAP_MAX_INCHES = 16.0
+_HEATMAP_DPI = 300
+#: Beyond this many files per axis the per-cell score labels overlap into
+#: noise; the colour scale alone carries the information.
+_HEATMAP_ANNOTATE_MAX = 20
+#: `text.parse_math` off: upload names are user-controlled, and matplotlib
+#: would otherwise parse `$...$` in a tick label as mathtext (and can raise).
+_PLOT_RC = {"text.parse_math": False}
+
+
+def _png_bytes(fig: Figure) -> bytes:
+    """Serialize a rendered figure to PNG bytes at the report DPI."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=_HEATMAP_DPI, bbox_inches="tight")
+    return buf.getvalue()
 
 
 class ReportGenerator:
@@ -49,6 +65,8 @@ class ReportGenerator:
         preprocessor=None,
         min_match_words: int = 0,
         formats: str = "both",
+        pairs: list[dict] | None = None,
+        algorithm: str | None = None,
     ) -> dict[str, str]:
         """Write similarity_matrix.csv, similarity_heatmap.png, and the HTML report.
 
@@ -63,15 +81,23 @@ class ReportGenerator:
         `formats` is `csv` | `html` | `both`; the heatmap PNG is always
         written since both report formats reference it. Only the requested
         artifacts are generated, and only those appear in the returned dict.
+
+        `pairs` (`ScanResult.pairs(threshold)`) and `algorithm` are optional
+        extras for the HTML pair headers: matched k-gram counts (FR-10) and
+        the algorithm that produced the score.
         """
         os.makedirs(output_dir, exist_ok=True)
         artifacts = {"heatmap": self._heatmap(matrix, output_dir, threshold)}
         if formats in ("csv", "both"):
             artifacts["csv"] = self._csv(matrix, output_dir)
         if formats in ("html", "both"):
-            artifacts["html"] = self._html(
-                matrix, output_dir, threshold, file_data, preprocessor, min_match_words
+            path = os.path.join(output_dir, "comparison_report.html")
+            report = self.html_report(
+                matrix, threshold, file_data, preprocessor, min_match_words, pairs, algorithm
             )
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(report)
+            artifacts["html"] = path
         return artifacts
 
     def _csv(self, m: ComparisonMatrix, out: str) -> str:
@@ -87,25 +113,32 @@ class ReportGenerator:
         return path
 
     def heatmap_png_bytes(self, m: ComparisonMatrix, threshold: float = 0.70) -> bytes:
-        """Render the 300 DPI heatmap as PNG bytes, without touching disk."""
-        df = pd.DataFrame(m.as_numpy(), index=m.names, columns=m.names)
+        """Render the 300 DPI heatmap as PNG bytes, without touching disk.
+
+        Built on a standalone `Figure` rather than pyplot's global state, which
+        is not thread-safe under a threaded WSGI server.
+        """
         n = len(m.names)
-        fig, ax = plt.subplots(figsize=(max(6, n), max(5, n)))
-        sns.heatmap(
-            df, annot=True, fmt=".2f", cmap="YlOrRd", vmin=0, vmax=1, ax=ax, linewidths=0.5
-        )
-        for i in range(n):
-            for j in range(n):
-                if i != j and m.get(i, j) >= threshold:
-                    ax.add_patch(
-                        Rectangle((j, i), 1, 1, fill=False, edgecolor="red", lw=2)
-                    )
-        buf = io.BytesIO()
-        plt.tight_layout()
-        plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        buf.seek(0)
-        return buf.getvalue()
+        side = min(_HEATMAP_MAX_INCHES, max(6.0, n * 0.6 + 2))
+        df = pd.DataFrame(m.as_numpy(), index=m.names, columns=m.names)
+        with matplotlib.rc_context(_PLOT_RC):
+            fig = Figure(figsize=(side, side * 0.85), layout="tight")
+            ax = fig.subplots()
+            sns.heatmap(
+                df,
+                annot=n <= _HEATMAP_ANNOTATE_MAX,
+                fmt=".2f",
+                cmap="YlOrRd",
+                vmin=0,
+                vmax=1,
+                ax=ax,
+                linewidths=0.5,
+            )
+            for i in range(n):
+                for j in range(n):
+                    if i != j and m.get(i, j) >= threshold:
+                        ax.add_patch(Rectangle((j, i), 1, 1, fill=False, edgecolor="red", lw=2))
+            return _png_bytes(fig)
 
     def single_row_heatmap_png_bytes(
         self,
@@ -117,40 +150,33 @@ class ReportGenerator:
         """Render a 1xK similarity heatmap (reference file vs candidates) as PNG bytes."""
         k = len(candidate_names)
         df = pd.DataFrame([scores], index=[ref_name], columns=candidate_names)
+        width = min(_HEATMAP_MAX_INCHES, max(6.0, k * 1.1 + 3))
 
-        fig_width = max(6, k * 2.2)
-        fig_height = 2.8
-        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+        with matplotlib.rc_context(_PLOT_RC):
+            fig = Figure(figsize=(width, 2.8), layout="tight")
+            ax = fig.subplots()
+            sns.heatmap(
+                df,
+                annot=k <= _HEATMAP_ANNOTATE_MAX,
+                fmt=".2f",
+                cmap="YlOrRd",
+                vmin=0,
+                vmax=1,
+                ax=ax,
+                linewidths=1.0,
+                cbar=True,
+                annot_kws={"size": 11, "weight": "bold"},
+            )
+            for j, score in enumerate(scores):
+                if score >= threshold:
+                    ax.add_patch(Rectangle((j, 0), 1, 1, fill=False, edgecolor="red", lw=3))
 
-        sns.heatmap(
-            df,
-            annot=True,
-            fmt=".2f",
-            cmap="YlOrRd",
-            vmin=0,
-            vmax=1,
-            ax=ax,
-            linewidths=1.0,
-            cbar=True,
-            annot_kws={"size": 11, "weight": "bold"},
-        )
-
-        for j, score in enumerate(scores):
-            if score >= threshold:
-                ax.add_patch(
-                    Rectangle((j, 0), 1, 1, fill=False, edgecolor="red", lw=3)
-                )
-
-        plt.yticks(rotation=0, fontsize=10, fontweight="bold")
-        plt.xticks(rotation=45, ha="right", fontsize=10)
-        plt.title(f"Similarity Matrix (vs {ref_name})", fontsize=12, pad=12, fontweight="bold")
-
-        buf = io.BytesIO()
-        plt.tight_layout()
-        plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        buf.seek(0)
-        return buf.getvalue()
+            ax.tick_params(axis="y", labelrotation=0, labelsize=10)
+            ax.tick_params(axis="x", labelrotation=45, labelsize=10)
+            for label in ax.get_xticklabels():
+                label.set_horizontalalignment("right")
+            ax.set_title(f"Similarity Matrix (vs {ref_name})", fontsize=12, pad=12, weight="bold")
+            return _png_bytes(fig)
 
     def pair_pdf_bytes(
         self,
@@ -197,39 +223,44 @@ class ReportGenerator:
             body_b=_segments_to_html(_wrap_segments(_highlight_segments(text_b, spans_b))),
         )
 
-        story = fitz.Story(html=page, user_css=_PDF_CSS)
+        story = pymupdf.Story(html=page, user_css=_PDF_CSS)
         buf = io.BytesIO()
-        writer = fitz.DocumentWriter(buf)
-        content = fitz.paper_rect("a4") + (36, 36, -36, -36)
+        writer = pymupdf.DocumentWriter(buf)
+        content = pymupdf.paper_rect("a4") + (36, 36, -36, -36)
         more = 1
         while more:
-            device = writer.begin_page(fitz.paper_rect("a4"))
+            device = writer.begin_page(pymupdf.paper_rect("a4"))
             more, _ = story.place(content)
             story.draw(device)
             writer.end_page()
         writer.close()
         return buf.getvalue()
 
-    def _html(
+    def html_report(
         self,
         m: ComparisonMatrix,
-        out: str,
-        thr: float,
-        file_data: dict | None,
-        preprocessor,
+        threshold: float,
+        file_data: dict | None = None,
+        preprocessor=None,
         min_match_words: int = 0,
+        pairs: list[dict] | None = None,
+        algorithm: str | None = None,
     ) -> str:
-        flagged = m.get_flagged(thr)
-        body = _render_summary(flagged, thr)
+        """Render the self-contained HTML comparison report as a string.
+
+        With `file_data` and `preprocessor`, each flagged pair gets
+        side-by-side panes with its matched spans highlighted; without them
+        the report degrades to a flat flagged-pairs table.
+        """
+        flagged = (
+            [p for p in pairs if p["flagged"]] if pairs is not None else m.get_flagged(threshold)
+        )
+        body = _render_summary(flagged, threshold)
         if file_data is not None and preprocessor is not None:
-            body += _render_pairs(flagged, file_data, preprocessor, min_match_words)
+            body += _render_pairs(flagged, file_data, preprocessor, min_match_words, algorithm)
         else:
             body += _render_flat_table(flagged)
-
-        path = os.path.join(out, "comparison_report.html")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(_PAGE_TEMPLATE.format(body=body, flagged_count=len(flagged), threshold=thr))
-        return path
+        return _PAGE_TEMPLATE.format(body=body, flagged_count=len(flagged), threshold=threshold)
 
 
 # --------------------------------------------------------------------------
@@ -300,7 +331,7 @@ def _spanned_tokens(text: str, language: str, preprocessor) -> list[tuple[str, i
     out = []
     for word, start, end in word_spans:
         stemmed = preprocessor.stemmer.stem(word.lower())
-        if stemmed in preprocessor.stop_words:
+        if preprocessor.is_filtered(stemmed, language):
             continue
         out.append((stemmed, start, end))
     return out
@@ -485,6 +516,10 @@ def _highlight(text: str, spans: list[tuple[int, int]]) -> str:
 # --------------------------------------------------------------------------
 
 
+def _score_class(score: float) -> str:
+    return "score-high" if score >= 0.90 else "score-mid"
+
+
 def _render_summary(flagged: list[dict], thr: float) -> str:
     if not flagged:
         return (
@@ -492,13 +527,15 @@ def _render_summary(flagged: list[dict], thr: float) -> str:
         )
     rows = "".join(
         f'<tr><td>{html.escape(p["file_a"])}</td><td>{html.escape(p["file_b"])}</td>'
-        f'<td class="score {"score-high" if p["score"] >= 0.90 else "score-mid"}">'
-        f'{p["score"]:.4f}</td></tr>'
+        f'<td class="score {_score_class(p["score"])}">{p["score"]:.4f}</td>'
+        f'<td class="num">{p.get("matched_kgrams", "—")}</td>'
+        "<td>Flagged for review</td></tr>"
         for p in flagged
     )
     return (
         '<table class="summary"><thead><tr><th>File A</th><th>File B</th>'
-        f"<th>Score</th></tr></thead><tbody>{rows}</tbody></table>"
+        "<th>Score</th><th>Matched 5-grams</th><th>Status</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
     )
 
 
@@ -516,12 +553,25 @@ def _render_flat_table(flagged: list[dict]) -> str:
     )
 
 
+def _pair_meta(pair: dict, algorithm: str | None) -> str:
+    parts = ["Flagged for review"]
+    if algorithm:
+        parts.append(html.escape(algorithm))
+    if "matched_kgrams" in pair:
+        parts.append(f'{pair["matched_kgrams"]} matched 5-grams')
+    return " &middot; ".join(parts)
+
+
 def _render_pairs(
-    flagged: list[dict], file_data: dict, preprocessor, min_match_words: int = 0
+    flagged: list[dict],
+    file_data: dict,
+    preprocessor,
+    min_match_words: int = 0,
+    algorithm: str | None = None,
 ) -> str:
     # Imported here rather than at module scope: similarity_index imports
     # from this module, so a top-level import would be circular.
-    from .similarity_index import _filter_by_word_count
+    from .similarity_index import filter_by_word_count
 
     cards = []
     for pair in flagged:
@@ -534,14 +584,15 @@ def _render_pairs(
         )
         # Same filter the scan scored with, so the highlighting can't show
         # matches the score deliberately excluded.
-        spans_a = _filter_by_word_count(data_a["raw"], spans_a, min_match_words)
-        spans_b = _filter_by_word_count(data_b["raw"], spans_b, min_match_words)
+        spans_a = filter_by_word_count(data_a["raw"], spans_a, min_match_words)
+        spans_b = filter_by_word_count(data_b["raw"], spans_b, min_match_words)
         cards.append(
             _PAIR_TEMPLATE.format(
                 name_a=html.escape(name_a),
                 name_b=html.escape(name_b),
                 score=f"{score:.4f}",
-                badge_class="score-high" if score >= 0.90 else "score-mid",
+                badge_class=_score_class(score),
+                meta=_pair_meta(pair, algorithm),
                 text_a=_highlight(data_a["raw"], spans_a),
                 text_b=_highlight(data_b["raw"], spans_b),
             )
@@ -552,7 +603,7 @@ def _render_pairs(
 _PAIR_TEMPLATE = """
 <details class="pair" open>
   <summary>
-    <span class="pair-names">{name_a} &harr; {name_b}</span>
+    <span class="pair-names">{name_a} &harr; {name_b}<small>{meta}</small></span>
     <span class="badge {badge_class}">{score}</span>
   </summary>
   <div class="side-by-side">
@@ -636,7 +687,12 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   }}
   table.summary th {{ color: var(--text-muted); font-weight: 500; }}
   table.summary tr:last-child td {{ border-bottom: none; }}
-  td.score {{ font-variant-numeric: tabular-nums; font-weight: 600; }}
+  td.score, td.num {{ font-variant-numeric: tabular-nums; font-weight: 600; }}
+  td.num {{ font-weight: 400; color: var(--text-muted); }}
+  .pair-names small {{
+    display: block; margin-top: 0.15rem; font-size: 0.75rem; font-weight: 400;
+    color: var(--text-muted);
+  }}
   .score-mid {{ color: var(--amber); }}
   .score-high {{ color: var(--red); }}
   .empty {{ color: var(--text-muted); font-size: 0.9rem; }}

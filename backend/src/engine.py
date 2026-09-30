@@ -28,6 +28,22 @@ class ScanResult:
     matrix: ComparisonMatrix | None = None
     similarity_indices: dict[str, float] = field(default_factory=dict)
     source_breakdowns: dict[str, list[dict]] = field(default_factory=dict)
+    #: Distinct shared k-grams per unordered pair, keyed `(name_a, name_b)` in
+    #: `names` order — the "number of k-grams matched" FR-10 reports.
+    matched_kgrams: dict[tuple[str, str], int] = field(default_factory=dict)
+
+    def pairs(self, threshold: float) -> list[dict]:
+        """Every unique pair with its score, flag and matched k-gram count."""
+        if self.matrix is None:
+            return []
+        return [
+            {
+                **pair,
+                "flagged": pair["score"] >= threshold,
+                "matched_kgrams": self.matched_kgrams.get((pair["file_a"], pair["file_b"]), 0),
+            }
+            for pair in self.matrix.all_pairs()
+        ]
 
 
 class ScanEngine:
@@ -79,8 +95,9 @@ class ScanEngine:
             result.similarity_indices = indices
             result.source_breakdowns = breakdowns
 
+        kgram_sets = {name: set(data.get("kgrams", ())) for name, data in file_data.items()}
         matrix = ComparisonMatrix(names)
-        for name_a, name_b in itertools.combinations(names, 2):
+        for (i, name_a), (j, name_b) in itertools.combinations(enumerate(names), 2):
             data_a, data_b = file_data[name_a], file_data[name_b]
             if self.algorithm == "auto" and pair_spans is not None:
                 spans_a, spans_b = pair_spans[(name_a, name_b)]
@@ -89,7 +106,8 @@ class ScanEngine:
                 )
             else:
                 score = self._compute_pair(data_a, data_b)
-            matrix.set(names.index(name_a), names.index(name_b), score)
+            matrix.set(i, j, score)
+            result.matched_kgrams[(name_a, name_b)] = len(kgram_sets[name_a] & kgram_sets[name_b])
         result.matrix = matrix
 
         return result

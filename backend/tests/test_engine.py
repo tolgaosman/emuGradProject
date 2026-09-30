@@ -1,5 +1,6 @@
 """ test_engine.py — ScanEngine pairwise computation. """
 import pytest
+
 from src.engine import ScanEngine
 
 

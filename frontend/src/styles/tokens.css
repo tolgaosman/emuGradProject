@@ -1,58 +1,77 @@
+/* Design tokens. Light is the default; `[data-theme='dark']` is set before
+   first paint by the inline script in index.html, so there is a single dark
+   block rather than a duplicated prefers-color-scheme fallback. */
+
 :root {
-  /* ---------- Raw palette ---------- */
-  --ink-0: #ffffff;
-  --ink-50: #fbfbfa;
-  --ink-100: #f2f2f0;
-  --ink-150: #ebebe9;
-  --ink-200: #e2e2df;
-  --ink-300: #cfcfcb;
-  --ink-400: #9c9c96;
-  --ink-500: #71716b;
-  --ink-600: #4d4d48;
-  --ink-700: #2e2e2b;
-  --ink-800: #1c1c1a;
-  --ink-900: #141413;
-  --ink-950: #0e0e0d;
-  --ink-1000: #0a0a0a;
+  color-scheme: light;
 
-  --amber-300: #ffd873;
-  --amber-400: #ffc94d;
-  --amber-500: #f5b921;
-  --amber-600: #d99a00;
-  --amber-700: #a86f00;
+  /* Surfaces */
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-2: #f6f6f7;
+  --surface-3: #eeeef0;
+  --overlay: rgba(10, 10, 12, 0.32);
 
-  --red-500: #b91c1c;
-  --red-bg: #fee2e2;
-  --red-border: #fca5a5;
-  --emerald-500: #059669;
-  --emerald-bg: #ecfdf5;
+  /* Lines */
+  --border: rgba(10, 10, 14, 0.08);
+  --border-strong: rgba(10, 10, 14, 0.14);
 
-  /* ---------- Semantic (light default) ---------- */
-  --bg: var(--ink-50);
-  --surface: var(--ink-0);
-  --surface-raised: var(--ink-0);
-  --surface-sunken: var(--ink-100);
+  /* Text — every step meets WCAG AA on --surface and --bg */
+  --text: #111113;
+  --text-2: #52525b;
+  --text-3: #6e6e77;
+  --text-inverse: #fafafa;
 
-  --border-hairline: var(--ink-150);
-  --border: var(--ink-200);
-  --border-strong: var(--ink-300);
+  /* Brand accent (the logo's amber). Reserved for the primary action, the
+     active indicator and the brand mark. */
+  --accent: #f5b921;
+  --accent-hover: #ebab0c;
+  --accent-ink: #1c1500;
+  --accent-soft: rgba(245, 185, 33, 0.14);
+  /* Focus uses a darker amber so the ring keeps 3:1 against light surfaces. */
+  --focus: #a16207;
 
-  --text: var(--ink-1000);
-  --text-muted: var(--ink-500);
-  --text-faint: var(--ink-400);
+  /* Similarity bands (report Table 57: very high ≥ .90, high ≥ .70,
+     moderate ≥ .50, low below). Colour depth tracks severity (§3.2.8). */
+  --risk-veryhigh: #c4271c;
+  --risk-veryhigh-bg: #fef2f1;
+  --risk-veryhigh-border: #fbcfca;
+  --risk-high: #b8470b;
+  --risk-high-bg: #fff5ed;
+  --risk-high-border: #fdd5b4;
+  --risk-moderate: #8f5e00;
+  --risk-moderate-bg: #fefaeb;
+  --risk-moderate-border: #f5e0a3;
+  --risk-low: #52525b;
+  --risk-low-bg: #f4f4f5;
+  --risk-low-border: #e4e4e7;
+  --heat: #e0453a;
+  --mark: rgba(245, 185, 33, 0.32);
+  --mark-active: rgba(245, 185, 33, 0.62);
 
-  --amber-bg: #fef3c7;
-  --amber-border: #fcd34d;
-  --amber: #b45309;
-  --red: var(--red-500);
-  --emerald: var(--emerald-500);
+  --success: #15803d;
+  --danger: #c4271c;
+  --danger-bg: #fef2f1;
+  --danger-border: #fbcfca;
 
-  --accent: var(--amber-500);
-  --accent-hover: var(--amber-600);
-  --accent-ink: var(--ink-1000);
-  --focus-ring: rgba(245, 185, 33, 0.4);
+  /* Elevation — hairlines carry structure; shadows stay whisper-quiet */
+  --shadow-1: 0 1px 2px rgba(16, 16, 20, 0.04), 0 1px 1px rgba(16, 16, 20, 0.02);
+  --shadow-2: 0 6px 16px -6px rgba(16, 16, 20, 0.1), 0 2px 4px -2px rgba(16, 16, 20, 0.05);
+  --shadow-3: 0 28px 56px -16px rgba(16, 16, 20, 0.22), 0 10px 20px -10px rgba(16, 16, 20, 0.1);
 
-  /* Spacing (4px scale) */
+  /* Type */
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: clamp(1.375rem, 1.1rem + 0.9vw, 1.75rem);
+  --text-2xl: clamp(1.75rem, 1.2rem + 1.8vw, 2.5rem);
+  --tracking-tight: -0.02em;
+
+  /* Spacing — 4px grid */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -63,90 +82,73 @@
   --space-10: 40px;
   --space-12: 48px;
   --space-16: 64px;
+  --gutter: clamp(16px, 3vw, 32px);
 
-  /* Radius — sharper than before */
+  /* Shape */
   --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
   --radius-full: 999px;
 
-  /* Typography */
-  --font-sans:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, ui-sans-serif, sans-serif;
-  --font-mono:
-    ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  /* Layout */
+  --header-h: 56px;
+  --content-max: 1320px;
+  --sidebar-w: clamp(320px, 30vw, 400px);
 
-  /* Motion (Emil Kowalski style) */
-  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --duration-fast: 150ms;
-  --duration-base: 250ms;
-  --duration-slow: 450ms;
-
-  /* Shadow — restrained; hairline borders carry most structure in light mode */
-  --shadow-sm: 0 1px 2px rgba(10, 10, 10, 0.05);
-  --shadow-md: 0 6px 20px rgba(10, 10, 10, 0.07);
-  --shadow-lg: 0 16px 40px rgba(10, 10, 10, 0.12);
+  /* Motion */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
 }
 
-/* ---------- Dark theme ----------
-   Deliberately a dim charcoal, not an OLED-black "night mode" — bg/surface
-   sit close together in value so the whole palette reads as one cohesive
-   dimmed tone rather than stark black-and-white. */
 :root[data-theme='dark'] {
-  --bg: #1b1b19;
-  --surface: #232320;
-  --surface-raised: #2b2b27;
-  --surface-sunken: #191916;
+  color-scheme: dark;
 
-  --border-hairline: #302f2b;
-  --border: #3c3b36;
-  --border-strong: #4c4b44;
+  --bg: #0b0b0c;
+  --surface: #111113;
+  --surface-2: #18181b;
+  --surface-3: #212125;
+  --overlay: rgba(0, 0, 0, 0.6);
 
-  --text: #eae7e1;
-  --text-muted: #a6a299;
-  --text-faint: #78746b;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
 
-  --amber-bg: rgba(245, 185, 33, 0.16);
-  --amber-border: rgba(245, 185, 33, 0.38);
-  --amber: var(--amber-400);
-  --red: #c17b7b;
-  --red-bg: rgba(193, 123, 123, 0.16);
-  --red-border: rgba(193, 123, 123, 0.4);
-  --emerald: #34d399;
+  --text: #ededef;
+  --text-2: #a8a8b0;
+  --text-3: #8e8e97;
+  --text-inverse: #111113;
 
-  --accent: var(--amber-500);
-  --accent-hover: var(--amber-400);
-  --accent-ink: var(--ink-1000);
-  --focus-ring: rgba(245, 185, 33, 0.45);
+  --accent-hover: #f8c745;
+  --accent-soft: rgba(245, 185, 33, 0.12);
+  --focus: #f5b921;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
-  --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 18px 40px rgba(0, 0, 0, 0.38);
-}
+  --risk-veryhigh: #ff9b92;
+  --risk-veryhigh-bg: rgba(229, 72, 58, 0.14);
+  --risk-veryhigh-border: rgba(229, 72, 58, 0.34);
+  --risk-high: #fdb27a;
+  --risk-high-bg: rgba(234, 108, 32, 0.13);
+  --risk-high-border: rgba(234, 108, 32, 0.32);
+  --risk-moderate: #f5cf6b;
+  --risk-moderate-bg: rgba(245, 185, 33, 0.1);
+  --risk-moderate-border: rgba(245, 185, 33, 0.26);
+  --risk-low: #a8a8b0;
+  --risk-low-bg: rgba(255, 255, 255, 0.05);
+  --risk-low-border: rgba(255, 255, 255, 0.1);
+  --heat: #e5584c;
+  --mark: rgba(245, 185, 33, 0.24);
+  --mark-active: rgba(245, 185, 33, 0.5);
 
-/* Fallback for the brief window before useTheme sets data-theme, and for
-   users with scripting disabled: honor the OS preference. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']):not([data-theme='dark']) {
-    --bg: #1b1b19;
-    --surface: #232320;
-    --surface-raised: #2b2b27;
-    --surface-sunken: #191916;
-    --border-hairline: #302f2b;
-    --border: #3c3b36;
-    --border-strong: #4c4b44;
-    --text: #eae7e1;
-    --text-muted: #a6a299;
-    --text-faint: #78746b;
-    --amber-bg: rgba(245, 185, 33, 0.16);
-    --amber-border: rgba(245, 185, 33, 0.38);
-    --amber: var(--amber-400);
-    --red: #c17b7b;
-    --red-bg: rgba(193, 123, 123, 0.16);
-    --red-border: rgba(193, 123, 123, 0.4);
-    --emerald: #34d399;
-  }
+  --success: #4ade80;
+  --danger: #ff9b92;
+  --danger-bg: rgba(229, 72, 58, 0.12);
+  --danger-border: rgba(229, 72, 58, 0.32);
+
+  --shadow-1: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-2: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  --shadow-3: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 32px 64px -16px rgba(0, 0, 0, 0.75);
 }
 
 @media (prefers-reduced-motion: reduce) {

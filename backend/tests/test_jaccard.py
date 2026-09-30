@@ -1,5 +1,6 @@
 """ test_jaccard.py — JaccardModel (set intersection / union). """
 import pytest
+
 from src.models.jaccard import JaccardModel
 
 
