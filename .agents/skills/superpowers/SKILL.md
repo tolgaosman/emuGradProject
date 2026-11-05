@@ -1,17 +1,33 @@
 ---
 name: superpowers
 description: >-
-  Activate advanced AI reasoning capabilities. Use for impossible bugs, complex 
-  architectural design, and deep codebase analysis.
+  Disciplined engineering workflow: brainstorm, plan, test-first implementation, systematic debugging,
+  verification before completion. Use for any multi-step feature or bug fix.
 ---
 
-# Superpowers Activation
+# Superpowers — workflow
 
-Utilize deep reasoning and exhaustive search to solve complex problems.
+## 1. Clarify (briefly)
+Restate the goal and constraints. Ask only if the answer changes the work and cannot be inferred from code or CLAUDE.md.
 
-## Workflow
-1. **Deep Context Loading**: Actively search the entire workspace for all files remotely related to the problem. Do not guess; verify.
-2. **Chain of Thought**: Explicitly write out step-by-step reasoning before outputting any code or solutions.
-3. **Hypothesis Testing**: Formulate multiple hypotheses for a bug. Methodically disprove them one by one.
-4. **Holistic Refactoring**: When designing architecture, consider the impact on the entire system, not just the local module.
-5. **Self-Correction**: Critically evaluate your own proposed solutions for flaws before finalizing them.
+## 2. Plan
+Write a short numbered plan: files to touch, tests to add, order of steps, risks. Split into phases with a green gate between each (`ruff check` + `pytest`; frontend `tsc` + `build`).
+
+## 3. Test-driven loop
+1. Write a failing test that captures the behaviour (add untagged tests; never repurpose a TC-xx).
+2. Run it and see it fail for the right reason.
+3. Write the smallest implementation that passes.
+4. Refactor with tests green.
+
+## 4. Systematic debugging
+Reproduce, isolate (bisect inputs or commits), form one hypothesis, test it with evidence (print, log, debugger), fix the root cause, add a regression test. Don't shotgun changes. After three failed hypotheses, re-read the code path end to end.
+
+## 5. Verification before completion
+Never say "done" without running tests, linter, build and (for UI) viewing the page. Report actual output. If something was skipped or is failing, say so.
+
+## 6. Hygiene
+Small commits with intent-revealing messages. Don't commit unless asked. No unrelated refactors in the same change. Leave no scratch files in the repo.
+
+## Project gates
+- `cd backend && venv/Scripts/python.exe -m pytest` (90% coverage gate) and `ruff check .`
+- `cd frontend && npm run build && npm run lint`

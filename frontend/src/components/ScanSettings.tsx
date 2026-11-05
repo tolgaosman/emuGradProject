@@ -5,6 +5,7 @@ import { getAlgorithms } from '../api/client'
 import type { Algorithm, Mode } from '../api/types'
 import { ALGORITHM_HINT, ALGORITHM_LABEL, formatPercent } from '../lib/format'
 import { EASE_OUT } from '../lib/motion'
+import { DEFAULT_MIN_MATCH_WORDS } from './DropZone/rules'
 import { ChevronIcon } from './icons'
 
 const FALLBACK_CHOICES: Record<Mode, Algorithm[]> = {
@@ -35,7 +36,10 @@ export function ScanSettings({
   disabled,
 }: ScanSettingsProps) {
   const [choices, setChoices] = useState<Algorithm[]>(FALLBACK_CHOICES[mode])
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  // Non-default settings (e.g. adopted from a reopened scan) open the section
+  // unless the user has toggled it themselves.
+  const [advancedToggle, setAdvancedToggle] = useState<boolean | null>(null)
+  const advancedOpen = advancedToggle ?? (algorithm !== 'auto' || minMatchWords !== DEFAULT_MIN_MATCH_WORDS)
   const chipRefs = useRef<(HTMLButtonElement | null)[]>([])
   const uid = useId()
 
@@ -105,6 +109,88 @@ export function ScanSettings({
         </div>
       </div>
 
+      <button
+        type="button"
+        className="disclosure"
+        aria-expanded={advancedOpen}
+        aria-controls={`${uid}-advanced`}
+        onClick={() => setAdvancedToggle(!advancedOpen)}
+      >
+        <span>Advanced</span>
+        <span className="disclosure-summary">
+          {ALGORITHM_LABEL[algorithm]} · {minMatchWords}-word minimum
+        </span>
+        <motion.span animate={{ rotate: advancedOpen ? 180 : 0 }} transition={{ duration: 0.2, ease: EASE_OUT }}>
+          <ChevronIcon size={14} />
+        </motion.span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {advancedOpen && (
+          <motion.div
+            id={`${uid}-advanced`}
+            className="advanced"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.2, ease: EASE_OUT }}
+          >
+            <div className="advanced-inner">
+              <div className="field">
+                <span className="field-label" id={`${uid}-algorithm`}>
+                  Scoring
+                </span>
+                <div className="chips" role="radiogroup" aria-labelledby={`${uid}-algorithm`} onKeyDown={handleChipKeys}>
+                  {choices.map((choice, i) => (
+                    <button
+                      key={choice}
+                      ref={(el) => {
+                        chipRefs.current[i] = el
+                      }}
+                      type="button"
+                      role="radio"
+                      aria-checked={choice === algorithm}
+                      tabIndex={choice === algorithm ? 0 : -1}
+                      className="chip"
+                      disabled={disabled}
+                      onClick={() => onAlgorithmChange(choice)}
+                    >
+                      {ALGORITHM_LABEL[choice]}
+                      {choice === 'auto' && <span className="chip-tag">Default</span>}
+                    </button>
+                  ))}
+                </div>
+                <p className="field-hint">{ALGORITHM_HINT[algorithm]}</p>
+              </div>
+
+              <div className="field">
+                <div className="field-row">
+                  <label htmlFor={`${uid}-words`} className="field-label">
+                    Ignore matches shorter than
+                  </label>
+                  <output htmlFor={`${uid}-words`} className="field-value num">
+                    {minMatchWords} {minMatchWords === 1 ? 'word' : 'words'}
+                  </output>
+                </div>
+                <input
+                  id={`${uid}-words`}
+                  className="range"
+                  type="range"
+                  min={1}
+                  max={25}
+                  step={1}
+                  value={minMatchWords}
+                  disabled={disabled}
+                  aria-valuetext={`${minMatchWords} words`}
+                  style={{ '--fill': `${((minMatchWords - 1) / 24) * 100}%` } as CSSProperties}
+                  onChange={(e) => onMinMatchWordsChange(Number(e.target.value))}
+                />
+                <p className="field-hint">Short common phrases stop counting as evidence.</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

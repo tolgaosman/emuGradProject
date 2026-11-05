@@ -1,17 +1,41 @@
 ---
 name: web-design-guidelines
 description: >-
-  Established principles for standard web design, including contrast, scaling, fluid layouts, 
-  and mobile-first strategies.
+  Web interface review checklist (accessibility, performance, forms, focus, responsiveness, content).
+  Use to audit UI code against concrete rules and report findings as file:line.
 ---
 
-# Web Design Guidelines
+# Web interface guidelines — audit checklist
 
-Establish a solid foundation for all web interfaces.
+When asked to review UI, read the files, apply every rule below, and output findings as `path:line — issue — fix`.
 
-## Guidelines
-1. **Mobile-First**: Design and write CSS for the smallest screens first, progressively enhancing for larger viewports.
-2. **Fluid Typography**: Use `clamp()` for font sizes so they scale smoothly across device widths.
-3. **Contrast and Legibility**: Ensure text contrast meets WCAG AA standards (at least 4.5:1 for normal text).
-4. **Visual Hierarchy**: Guide the user's eye using size, color, and placement. The most important action should be immediately obvious.
-5. **Consistency**: Use a unified design token system for colors, spacing, and typography across the entire app.
+## Accessibility
+- Icon-only buttons have `aria-label`; form controls have `<label>` or `aria-label`.
+- `<button>` for actions, `<a>` for navigation; no `div onClick`.
+- Hierarchical headings, one `h1`. Landmarks: `header`, `main`, `nav`.
+- Visible `:focus-visible` style; never `outline: none` without a replacement.
+- Images have `alt` (empty if decorative). Contrast >= 4.5:1 body, 3:1 large text and UI.
+- Async updates announced via `aria-live`.
+
+## Forms
+- Correct `type`, `inputmode` and `autocomplete`; don't block paste.
+- Errors next to the field; focus the first invalid field on submit.
+- Submit buttons show pending state and prevent double-submit.
+
+## Interaction and motion
+- `prefers-reduced-motion` honoured; animate `transform`/`opacity` only; no `transition: all`.
+- Hit areas >= 36px (44px on touch); `touch-action: manipulation` on controls.
+- Destructive actions confirm or are undoable.
+
+## Layout and responsive
+- Works from 360px to wide desktop; no horizontal page scroll.
+- Long text: `text-overflow`, `min-width: 0` on flex children, `overflow-wrap` on filenames.
+- `100dvh` not `100vh`; respect safe-area insets.
+
+## Performance
+- Large lists virtualized or paginated (50x50 matrix is the upper bound; keep cells light).
+- Lazy-load heavy views; no layout shift (set dimensions); self-hosted fonts with `font-display: swap`.
+- Memoize derived data; stable keys.
+
+## Content
+Concise, specific, sentence case, active voice; numbers with units; error text says how to fix.

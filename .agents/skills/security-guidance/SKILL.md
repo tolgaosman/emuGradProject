@@ -1,17 +1,38 @@
 ---
 name: security-guidance
 description: >-
-  General security practices covering OWASP Top 10 prevention, secure authentication flows, 
-  encryption, and auditing.
+  Secure-coding rules to follow while writing code (not after). Use whenever handling files, user input,
+  SQL, subprocesses, HTML output or secrets in this repo.
 ---
 
-# General Security Guidance
+# Security guidance — while coding
 
-Ensure baseline security is never compromised.
+## Always
+- Validate at the boundary, early: type, size, extension, count, charset. Fail closed with the `{error, code}` envelope.
+- Treat filenames as data: `secure_filename` for storage, `html.escape` or React text nodes for display.
+- Parameterize SQL. Never string-format queries.
+- Use `tempfile.TemporaryDirectory()` for uploads; clean up on every exit path.
+- Resolve a path, then verify it stays inside the intended root.
+- Keep secrets in environment variables; never log them or document text.
+- Keep dependencies minimal; no new network-capable libraries in `backend/`.
 
-## Key Directives
-1. **Never Trust Input**: Validate all input on the server side, even if client-side validation exists.
-2. **Authentication/Authorization**: Enforce least privilege. Ensure JWTs or session cookies are secure (HttpOnly, Secure, SameSite).
-3. **Data Protection**: Encrypt sensitive data at rest and in transit (TLS 1.2+). Do not log passwords or PII.
-4. **Error Handling**: Fail securely. Do not leak stack traces or internal system states in production error responses.
-5. **Dependency Auditing**: Regularly check for and update vulnerable third-party packages.
+## Never
+- `eval`, `exec`, `pickle.loads`, `yaml.load`, `shell=True`, `os.system` on anything derived from input.
+- Accept server file paths from API clients.
+- `dangerouslySetInnerHTML`, `innerHTML` or `document.write` with scan or document content.
+- Return exception messages or stack traces to clients.
+- Disable TLS/CORS/CSRF protections "temporarily".
+- Add outbound calls (search APIs, telemetry, AI detection). Flag any such request to the user first.
+
+## Patterns
+```python
+dest = (root / secure_filename(name)).resolve()
+if not dest.is_relative_to(root.resolve()):
+    raise ValueError("Invalid file name")
+```
+```tsx
+<span>{doc.name}</span>   {/* text node, never HTML injection */}
+```
+
+## Review triggers
+Any change to `loader.py`, `app.py` routes, `repository.py`, `reporter.py` HTML/PDF output, or `client.ts` download code deserves a security pass and a regression test.

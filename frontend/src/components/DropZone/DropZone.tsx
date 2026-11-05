@@ -41,8 +41,8 @@ export function DropZone({
   const single = maxFiles === 1
   const extensions = MODE_EXTENSIONS[mode]
 
-  // The parent can drop files out from under this zone (mode switch, new
-  // scan, a single-slot upload replacing a paste). When the pasted file is
+  // The parent can drop files out from under this zone (an incompatible file
+  // after a mode switch, a new scan, a single-slot upload replacing a paste). When the pasted file is
   // gone, reset the paste box so its text can't resurrect it.
   useEffect(() => {
     if (pasteFile.current && !files.includes(pasteFile.current)) {

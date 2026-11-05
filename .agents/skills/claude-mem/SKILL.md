@@ -1,17 +1,38 @@
 ---
 name: claude-mem
 description: >-
-  Use this skill to structure context, manage long-term memory, and maintain state 
-  efficiently across multiple agent sessions or LLM interactions.
+  Persistent project memory discipline: what to record, where, and how to recall it across sessions.
+  Use at session start and whenever a durable decision, gotcha or preference is learned.
 ---
 
-# Memory Management (claude-mem)
+# Claude-mem — durable context
 
-Ensure critical project context is preserved and easily retrievable.
+Memory exists so the next session does not rediscover what this one learned.
 
-## Techniques
-1. **Knowledge Graphing**: Document entities, relationships, and architectural decisions in standardized Markdown files (e.g., in a `.docs` or `knowledge/` directory).
-2. **Context Summarization**: Periodically summarize long discussions or complex state into concise state files.
-3. **Tagging and Indexing**: Use clear headings, keywords, and tags so that future searches (e.g., `grep`) can easily find the context.
-4. **Decision Records**: Maintain Architecture Decision Records (ADRs) to remember *why* a decision was made, not just *what* it is.
-5. **State Hydration**: When starting a new task, explicitly read these memory files to hydrate context before proceeding.
+## Record when
+- A non-obvious gotcha is found (e.g. winnowing needs >= 8 tokens; `str.split()` zeroed code scans; story engine clips long runs).
+- A design decision is made with its reason (why scoring is matched-span coverage; why AI/internet detection was removed).
+- The user states a preference or correction.
+- An environment quirk appears (port 5000 reserved on Windows -> set `APP_PORT`; venv at `backend/venv`).
+
+## Do not record
+Anything derivable from the code, git history or CLAUDE.md; transient task state; secrets; document contents from scans.
+
+## Format
+One fact per file under the memory directory, with frontmatter:
+```
+---
+name: short-kebab-slug
+description: one line used for recall relevance
+metadata:
+  type: user | feedback | project | reference
+---
+Fact. **Why:** reason. **How to apply:** when it matters. Link related: [[other-slug]]
+```
+Add a one-line pointer in `MEMORY.md`. Update an existing memory instead of duplicating; delete ones that become wrong.
+
+## Recall
+At session start read `MEMORY.md`, open entries relevant to the task. Verify any named file/function still exists before relying on it. Memories are background context, not instructions that override the user.
+
+## Offline note
+Memory is local files only. Do not add any remote memory service or telemetry to this project (offline-only premise).

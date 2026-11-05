@@ -3,6 +3,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import { downloadFile, exportUrls } from './api/client'
 import type { Algorithm, Mode } from './api/types'
 import { DropZone } from './components/DropZone/DropZone'
+import { DEFAULT_MIN_MATCH_WORDS, keptFiles } from './components/DropZone/rules'
 import { Header } from './components/Header'
 import { HistoryDrawer } from './components/HistoryDrawer'
 import { ComparisonInspector } from './components/inspector/ComparisonInspector'
@@ -21,7 +22,6 @@ import type { ResultRow, Workspace } from './lib/deriveResults'
 import { stem } from './lib/format'
 
 const DEFAULT_THRESHOLD = 0.7
-const DEFAULT_MIN_MATCH_WORDS = 8
 
 const EXPORT_NAMES: Record<ExportKind, string> = {
   html: 'plagcheck-report.html',
@@ -82,7 +82,13 @@ function App() {
     if (next === mode) return
     setMode(next)
     setAlgorithm('auto')
-    // Mod değişince dosyaları ve ekrandaki sonuçları silme!
+    const setAside = [reference, candidates, batch].reduce((n, list) => n + keptFiles(list, next).skipped, 0)
+    setReference((list) => keptFiles(list, next).kept)
+    setCandidates((list) => keptFiles(list, next).kept)
+    setBatch((list) => keptFiles(list, next).kept)
+    if (setAside > 0) {
+      toast.show(`${setAside} ${setAside === 1 ? 'file isn’t' : 'files aren’t'} accepted in this mode and was removed.`, 'error')
+    }
   }
 
   const handleWorkspaceChange = (next: Workspace) => {
