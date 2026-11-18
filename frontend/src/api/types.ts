@@ -154,11 +154,16 @@ export interface AlgorithmScores {
   ast: number | null
 }
 
+export type ModelSpanKey = 'cosine' | 'winnowing' | 'jaccard' | 'ast'
+
+export type ModelSpans = Record<ModelSpanKey, { a: [number, number][]; b: [number, number][] }>
+
 export interface PairResponse {
   file_a: PairSide
   file_b: PairSide
   paired_spans?: PairedSpan[]
   algorithm_scores?: AlgorithmScores
+  model_spans?: ModelSpans
   matched_kgrams?: number
   min_match_words?: number
 }

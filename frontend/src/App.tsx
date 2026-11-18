@@ -29,9 +29,9 @@ const WORKSPACE_OPTIONS: readonly { value: Workspace; label: string }[] = [
 ]
 
 const EXPORT_NAMES: Record<ExportKind, string> = {
-  pdf: 'plagcheck-report.pdf',
-  xlsx: 'plagcheck-report.xlsx',
-  heatmap: 'plagcheck-heatmap.png',
+  pdf: 'Similarity Report.pdf',
+  xlsx: 'Similarity Workbook.xlsx',
+  heatmap: 'Similarity Heatmap.png',
 }
 
 function App() {
@@ -88,15 +88,8 @@ function App() {
       state.result.min_match_words !== minMatchWords ||
       (runSignature !== '' && runSignature !== currentExclSig))
 
-  const clearStaged = () => {
-    setReference([])
-    setCandidates([])
-    setBatch([])
-  }
-
   const syncLoadedScan = (scan: CheckResponse) => {
     if (scan.mode !== mode) {
-      clearStaged()
       setMode(scan.mode)
     }
     setAlgorithm(scan.algorithm)
@@ -119,8 +112,6 @@ function App() {
 
   const handleWorkspaceChange = (next: Workspace) => {
     setWorkspace(next)
-    setSelected(null)
-    reset()
   }
 
   const runScan = () => {
@@ -171,7 +162,16 @@ function App() {
     reset()
   }
 
-  const onShortcut = useEffectEvent((e: KeyboardEvent) => {
+  const handleClearFiles = () => {
+    if (workspace === 'one-to-many') {
+      setReference([])
+      setCandidates([])
+    } else {
+      setBatch([])
+    }
+  }
+
+  const onShortcut =useEffectEvent((e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       runScan()
@@ -204,7 +204,7 @@ function App() {
 
   const savePairPdf = (row: ResultRow) => {
     if (!result) return
-    downloadFile(exportUrls.pairPdf(result.scan_id, row.fileA, row.fileB), `${stem(row.fileA)} vs ${stem(row.fileB)}.pdf`).catch(
+    downloadFile(exportUrls.pairPdf(result.scan_id, row.fileA, row.fileB), `Comparison - ${stem(row.fileA)} vs ${stem(row.fileB)}.pdf`).catch(
       (err: unknown) => toast.show(err instanceof Error ? err.message : 'PDF export failed.', 'error'),
     )
   }
@@ -251,7 +251,7 @@ function App() {
                 {workspace === 'one-to-many' ? (
                   <>
                     <DropZone
-                      label="Reference"
+                      label="Reference File"
                       files={reference}
                       onFilesChange={setReference}
                       mode={mode}
@@ -259,7 +259,7 @@ function App() {
                       disabled={busy}
                     />
                     <DropZone
-                      label="Candidates"
+                      label="File to be Checked"
                       files={candidates}
                       onFilesChange={setCandidates}
                       mode={mode}
@@ -275,6 +275,22 @@ function App() {
                     mode={mode}
                     disabled={busy}
                   />
+                )}
+
+                {files.length > 0 && (
+                  <div className="sidebar-files-foot">
+                    <span className="sidebar-files-count num">
+                      {files.length} {files.length === 1 ? 'file' : 'files'} staged
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleClearFiles}
+                      disabled={busy}
+                    >
+                      Clear files
+                    </button>
+                  </div>
                 )}
               </section>
 

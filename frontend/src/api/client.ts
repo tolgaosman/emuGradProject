@@ -132,7 +132,7 @@ function filenameFrom(disposition: string | null): string | null {
 export async function downloadFile(url: string, fallbackName: string): Promise<void> {
   let res: Response
   try {
-    res = await fetch(url)
+    res = await fetch(url, { cache: 'no-store' })
   } catch {
     throw new NetworkError()
   }

@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getPair } from '../../api/client'
-import type { Algorithm, AlgorithmScores, Mode, PairResponse } from '../../api/types'
+import type { Algorithm, Mode, PairResponse } from '../../api/types'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import type { ResultRow } from '../../lib/deriveResults'
 import { ALGORITHM_LABEL, formatPercent, pluralize } from '../../lib/format'
@@ -9,6 +9,7 @@ import { EASE_OUT, spring } from '../../lib/motion'
 import { IDENTICAL_SCORE } from '../../lib/risk'
 import { ChevronIcon, CloseIcon, CompareIcon, DownloadIcon, FoldIcon, LinkIcon, RefreshIcon } from '../icons'
 import { ReviewFlag, RiskPill } from '../results/RiskPill'
+import { AlgorithmStrip } from './AlgorithmStrip'
 import { DocumentPane } from './DocumentPane'
 import type { TaggedSpan } from './DocumentPane'
 
@@ -30,17 +31,6 @@ type ResolvedCache =
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(target.tagName))
 
-function buildAlgorithmItems(scores: AlgorithmScores, activeAlgo: Algorithm) {
-  const entries: { key: Algorithm; label: string; value: number }[] = [
-    { key: 'auto', label: 'Coverage', value: scores.coverage },
-    ...(scores.ast !== null ? [{ key: 'ast' as const, label: 'AST Structure', value: scores.ast }] : []),
-    { key: 'cosine', label: 'TF-IDF Cosine', value: scores.cosine },
-    { key: 'winnowing', label: 'Winnowing', value: scores.winnowing },
-    { key: 'jaccard', label: 'Jaccard', value: scores.jaccard },
-  ]
-  return entries.map((e) => ({ ...e, active: e.key === activeAlgo }))
-}
-
 export function ComparisonInspector({
   scanId,
   row,
@@ -59,6 +49,7 @@ export function ComparisonInspector({
     nonce: 0,
   })
   const [foldUnchanged, setFoldUnchanged] = useState(false)
+  const [view, setView] = useState<Algorithm>('auto')
 
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, true, onClose)
@@ -94,6 +85,14 @@ export function ComparisonInspector({
 
   const { spansA, spansB, matchIds } = useMemo(() => {
     if (!data) return { spansA: [] as TaggedSpan[], spansB: [] as TaggedSpan[], matchIds: [] as number[] }
+    const modelView = view !== 'auto' ? data.model_spans?.[view] : undefined
+    if (modelView) {
+      const tag = (ranges: [number, number][], offset: number): TaggedSpan[] =>
+        ranges.map(([start, end], i) => ({ id: offset + i, start, end }))
+      const a = tag(modelView.a, 0)
+      const b = tag(modelView.b, a.length)
+      return { spansA: a, spansB: b, matchIds: [...a, ...b].map((s) => s.id) }
+    }
     if (data.paired_spans && data.paired_spans.length > 0) {
       return {
         spansA: data.paired_spans.map((p) => ({
@@ -119,7 +118,7 @@ export function ComparisonInspector({
       spansB: fallbackB,
       matchIds: Array.from({ length: count }, (_, i) => i),
     }
-  }, [data])
+  }, [data, view])
 
   const activeMatchId = matchCursor.key === requestKey ? matchCursor.id : null
   const syncNonce = matchCursor.key === requestKey ? matchCursor.nonce : 0
@@ -157,9 +156,8 @@ export function ComparisonInspector({
   })
 
   const identical = data ? data.file_a.text === data.file_b.text || row.score >= IDENTICAL_SCORE : false
-  const noEvidence = data !== null && spansA.length === 0 && spansB.length === 0
+  const noEvidence = data !== null && view === 'auto' && spansA.length === 0 && spansB.length === 0
   const matchedKgrams = data?.matched_kgrams ?? row.matchedKgrams
-  const algoItems = data?.algorithm_scores ? buildAlgorithmItems(data.algorithm_scores, algorithm) : null
   const activePos = activeMatchId !== null ? matchIds.indexOf(activeMatchId) : -1
 
   return (
@@ -290,17 +288,8 @@ export function ComparisonInspector({
           </div>
         </header>
 
-        {data && algoItems && (
-          <div className="inspector-subbar">
-            <div className="algo-strip" aria-label="Algorithm scores">
-              {algoItems.map((item) => (
-                <span key={item.key} className="algo-chip num" data-active={item.active || undefined}>
-                  <span className="algo-chip-name">{item.label}</span>
-                  <strong>{formatPercent(item.value)}</strong>
-                </span>
-              ))}
-            </div>
-          </div>
+        {data?.algorithm_scores && (
+          <AlgorithmStrip scores={data.algorithm_scores} active={view} onSelect={setView} />
         )}
 
         {data && noEvidence && row.score > 0 && (
@@ -335,7 +324,7 @@ export function ComparisonInspector({
           {data && (
             <div className="inspector-panes">
               <DocumentPane
-                label="A"
+                label="Reference File"
                 name={data.file_a.name}
                 text={data.file_a.text}
                 spans={spansA}
@@ -346,7 +335,7 @@ export function ComparisonInspector({
                 onSelectMatch={selectMatch}
               />
               <DocumentPane
-                label="B"
+                label="File to be Checked"
                 name={data.file_b.name}
                 text={data.file_b.text}
                 spans={spansB}

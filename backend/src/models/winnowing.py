@@ -17,21 +17,25 @@ class WinnowingModel(SimilarityModel):
         """Set the k-gram size and winnowing window width."""
         self.k, self.w = k, w
 
-    def fingerprint(self, tokens: list[str]) -> set[int]:
-        """Compute the winnowing fingerprint set for `tokens`."""
+    def selected(self, tokens: list[str]) -> list[tuple[int, int]]:
+        """Return `(k-gram start index, hash)` for each fingerprint winnowing keeps."""
         if len(tokens) < self.k:
-            return set()
+            return []
         kgrams = [" ".join(tokens[i : i + self.k]) for i in range(len(tokens) - self.k + 1)]
         hashes = [_h32(kg) for kg in kgrams]
-        fps, prev = set(), -1
+        picked, prev = [], -1
         for i in range(len(hashes) - self.w + 1):
             window = hashes[i : i + self.w]
             min_val = min(window)
             min_idx = i + window.index(min_val)
             if min_idx != prev:  # avoid duplicate minimum selection
-                fps.add(min_val)
+                picked.append((min_idx, min_val))
                 prev = min_idx
-        return fps
+        return picked
+
+    def fingerprint(self, tokens: list[str]) -> set[int]:
+        """Compute the winnowing fingerprint set for `tokens`."""
+        return {h for _, h in self.selected(tokens)}
 
     def compute(self, tokens_a: list[str], tokens_b: list[str]) -> float:
         """Compute the Jaccard similarity of the two fingerprint sets."""

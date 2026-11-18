@@ -95,7 +95,7 @@ export function ResultsView({
           )}
           <ExportMenu onExport={onExport} busy={exportBusy} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={onNewScan}>
-            Clear
+            Clear scan
           </button>
         </div>
       </header>

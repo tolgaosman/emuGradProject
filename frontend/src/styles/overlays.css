@@ -147,7 +147,21 @@
   border-radius: var(--radius-full);
   background: var(--surface);
   color: var(--text-2);
+  font-family: inherit;
   font-size: 11px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s var(--ease-out),
+    background-color 0.15s var(--ease-out);
+}
+
+.algo-chip:hover:not([data-active]) {
+  border-color: var(--border-strong, var(--text-3));
+}
+
+.algo-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .algo-chip[data-active] {
@@ -162,6 +176,64 @@
 
 .algo-chip[data-active] .algo-chip-name {
   color: var(--text-2);
+}
+
+.algo-chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.algo-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 288px;
+  max-width: calc(100vw - 48px);
+  padding: 11px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  pointer-events: none;
+}
+
+.algo-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.algo-popover-title {
+  color: var(--text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.algo-popover-score {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.algo-popover-desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.algo-popover-hint {
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 10.5px;
 }
 
 .inspector-legend mark,
@@ -236,16 +308,17 @@
 }
 
 .doc-pane-label {
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  width: 20px;
   height: 20px;
+  padding: 0 7px;
   border-radius: 5px;
   background: var(--surface-3);
   color: var(--text-2);
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .doc-pane-name {

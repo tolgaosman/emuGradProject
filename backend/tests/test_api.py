@@ -602,7 +602,7 @@ def test_report_xlsx_and_full_pdf_exports(client):
     with pymupdf.open("pdf", pdf_resp.data) as doc:
         full_text = "".join(page.get_text() for page in doc)
     assert "CMSE 473, Midterm (1).txt" in full_text
-    assert "FLAGGED" in full_text
+    assert "Similarity Report" in full_text
 
     assert (
         client.get("/api/report/00000000-0000-0000-0000-000000000000/matrix.xlsx").status_code
@@ -612,3 +612,15 @@ def test_report_xlsx_and_full_pdf_exports(client):
         client.get("/api/report/00000000-0000-0000-0000-000000000000/report.pdf").status_code
         == 404
     )
+
+    # 1-vs-1 pair PDF includes dedicated pages for every model
+    pair_pdf = client.get(
+        f"/api/report/{scan_id}/pair-pdf/CMSE 473, Midterm (1).txt/CMSE 473, Midterm (2).txt"
+    )
+    assert pair_pdf.status_code == 200
+    with pymupdf.open("pdf", pair_pdf.data) as pdoc:
+        assert len(pdoc) >= 4
+        pages_txt = [page.get_text() for page in pdoc]
+    joined = "\n".join(pages_txt)
+    for model_heading in ("Coverage", "TF-IDF Cosine", "Winnowing", "Jaccard"):
+        assert model_heading in joined

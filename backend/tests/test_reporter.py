@@ -312,7 +312,15 @@ def test_excel_bytes_builds_valid_three_sheet_ooxml_workbook():
                 ET.fromstring(zf.read(member))
         shared_xml = zf.read("xl/sharedStrings.xml").decode("utf-8")
         assert "Ödev_1, final.docx" in shared_xml
-        assert "FLAGGED" in shared_xml
+        assert "Flagged" in shared_xml
+        styles_root = ET.fromstring(zf.read("xl/styles.xml"))
+        ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        alignments = styles_root.findall(".//s:cellXfs/s:xf/s:alignment", ns)
+        assert alignments
+        assert all(
+            al.get("horizontal") == "center" and al.get("vertical") == "center"
+            for al in alignments
+        )
 
     # Single-file empty-pair edge case must also serialize cleanly
     single = ReportGenerator().excel_bytes(ComparisonMatrix(["solo.txt"]), threshold=0.70)
@@ -364,8 +372,7 @@ def test_full_pdf_bytes_embeds_summary_heatmap_and_highlighted_evidence():
     assert "PlagCheck" in text
     assert "İzin_A.txt" in text
     assert "88.0%" in text
-    assert "FLAGGED" in text
-    assert "Page 1 of" in text
+    assert "1 /" in text
     with pymupdf.open("pdf", pdf) as doc:
         assert sum(len(page.get_images()) for page in doc) >= 1
 
@@ -374,3 +381,30 @@ def test_full_pdf_bytes_embeds_summary_heatmap_and_highlighted_evidence():
     low_m.set(0, 1, 0.12)
     low_pdf = ReportGenerator().full_pdf_bytes(low_m, threshold=0.70)
     assert "70% alert threshold" in _pdf_text(low_pdf)
+
+
+def test_model_spans_highlight_what_each_model_counts_as_shared():
+    """Each raw model reports highlight ranges on both documents; renamed
+    Python is invisible to word models but visible to the AST view."""
+    from src.preprocessor import Preprocessor
+    from src.reporter import model_spans
+
+    pre = Preprocessor()
+    shared = (
+        "quick brown foxes jumped across sleepy hounds beside winding rivers during autumn evenings"
+    )
+    prose_a = f"yesterday {shared} again"
+    prose_b = f"meanwhile {shared} elsewhere"
+    spans = model_spans(prose_a, prose_b, "text", "text", pre)
+    assert set(spans) == {"cosine", "winnowing", "jaccard", "ast"}
+    assert spans["jaccard"]["a"] and spans["jaccard"]["b"]
+    assert spans["winnowing"]["a"]
+    assert spans["ast"] == {"a": [], "b": []}
+    for side in ("a", "b"):
+        for start, end in spans["jaccard"][side]:
+            assert 0 <= start < end <= len(prose_a if side == "a" else prose_b)
+
+    code_a = "def add(a, b):\n    total = a + b\n    return total\n"
+    code_b = "def plus(x, y):\n    out = x + y\n    return out\n"
+    code = model_spans(code_a, code_b, "python", "python", pre)
+    assert code["ast"]["a"] and code["ast"]["b"]

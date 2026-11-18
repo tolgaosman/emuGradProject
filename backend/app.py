@@ -8,6 +8,7 @@ import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -23,11 +24,11 @@ from src.loader import MAX_BYTES, MAX_FILES, FileLoader, FileLoadError
 from src.matrix import ComparisonMatrix
 from src.models import ASTModel, CosineModel, JaccardModel, WinnowingModel
 from src.preprocessor import Preprocessor, load_raw_exclusion_terms
-from src.reporter import ReportGenerator, matched_spans, paired_spans
+from src.reporter import ReportGenerator, matched_spans, model_spans, paired_spans
 from src.repository import ScanRepository
 from src.similarity_index import DEFAULT_MIN_MATCH_WORDS, filter_by_word_count, pair_score
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -172,6 +173,18 @@ def _attachment(body, mimetype: str, filename: str) -> Response:
     return Response(
         body, mimetype=mimetype, headers={"Content-Disposition": _content_disposition(filename)}
     )
+
+
+def _export_name(record: dict, title: str, ext: str) -> str:
+    """Descriptive download name, e.g. `Similarity Report - Text - 4 files - 2026-11-18.pdf`."""
+    kind = "Code" if (record.get("mode") or "").startswith("code") else "Text"
+    count = len(record.get("files") or [])
+    date = str(record.get("created_at") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+    parts = [title, kind]
+    if count:
+        parts.append(f"{count} file{'s' if count != 1 else ''}")
+    parts.append(date)
+    return f"{' - '.join(parts)}.{ext}"
 
 
 def _display_name(filename: str | None) -> str:
@@ -860,6 +873,13 @@ def api_report_pair(scan_uuid, file_a, file_b):
         "file_b": {"name": file_b, "text": texts[file_b]["raw"], "matched_spans": spans_b},
         "paired_spans": linked,
         "algorithm_scores": algo_scores,
+        "model_spans": model_spans(
+            texts[file_a]["raw"],
+            texts[file_b]["raw"],
+            texts[file_a]["language"],
+            texts[file_b]["language"],
+            preprocessor,
+        ),
         "matched_kgrams": matched_kg,
         "min_match_words": min_match_words,
     })
@@ -878,7 +898,15 @@ def api_report_pair_pdf(scan_uuid, file_a, file_b):
     score the scan never produced.
     """
     scan_uuid = str(scan_uuid)
-    texts, spans_a, spans_b, _, _ = _pair_payload(scan_uuid, file_a, file_b)
+    texts, spans_a, spans_b, _, preprocessor = _pair_payload(scan_uuid, file_a, file_b)
+    _, algo_scores = _pair_stats(texts, file_a, file_b, spans_a, spans_b, preprocessor)
+    per_model = model_spans(
+        texts[file_a]["raw"],
+        texts[file_b]["raw"],
+        texts[file_a]["language"],
+        texts[file_b]["language"],
+        preprocessor,
+    )
 
     record = repository.get_scan(scan_uuid) or {}
     score = next(
@@ -899,20 +927,25 @@ def api_report_pair_pdf(scan_uuid, file_a, file_b):
         spans_b,
         score=score,
         threshold=record.get("threshold"),
-        mode=record.get("algorithm"),
+        mode=record.get("mode") or record.get("algorithm"),
         algorithm=record.get("algorithm_override"),
+        algorithm_scores=algo_scores,
+        per_model_spans=per_model,
+        scan_uuid=scan_uuid,
     )
     stem_a = os.path.splitext(file_a)[0]
     stem_b = os.path.splitext(file_b)[0]
-    return _attachment(pdf, "application/pdf", f"{stem_a} vs {stem_b}.pdf")
+    return _attachment(pdf, "application/pdf", f"Comparison - {stem_a} vs {stem_b}.pdf")
 
 
 @app.route("/api/report/<uuid:scan_uuid>/matrix.csv", methods=["GET"])
 def api_report_csv(scan_uuid):
     """Download the similarity matrix as CSV (FR-09)."""
     scan_uuid = str(scan_uuid)
-    matrix = _matrix_from_record(_require_scan(scan_uuid))
-    return _attachment(matrix.to_csv(), "text/csv", f"plagcheck-{scan_uuid[:8]}-matrix.csv")
+    record = _require_scan(scan_uuid)
+    matrix = _matrix_from_record(record)
+    filename = _export_name(record, "Similarity Matrix", "csv")
+    return _attachment(matrix.to_csv(), "text/csv", filename)
 
 
 @app.route("/api/report/<uuid:scan_uuid>/matrix.xlsx", methods=["GET"])
@@ -944,7 +977,7 @@ def api_report_xlsx(scan_uuid):
     return _attachment(
         xlsx,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        f"plagcheck-{scan_uuid[:8]}-report.xlsx",
+        _export_name(record, "Similarity Workbook", "xlsx"),
     )
 
 
@@ -989,7 +1022,7 @@ def api_report_pdf(scan_uuid):
         scan_uuid=scan_uuid,
         created_at=record.get("created_at"),
     )
-    return _attachment(pdf, "application/pdf", f"plagcheck-{scan_uuid[:8]}-report.pdf")
+    return _attachment(pdf, "application/pdf", _export_name(record, "Similarity Report", "pdf"))
 
 
 @app.route("/api/report/<uuid:scan_uuid>/report.html", methods=["GET"])
@@ -1013,7 +1046,7 @@ def api_report_html(scan_uuid):
         pairs=record.get("pairs"),
         algorithm=record.get("algorithm_override"),
     )
-    return _attachment(page, "text/html", f"plagcheck-{scan_uuid[:8]}-report.html")
+    return _attachment(page, "text/html", _export_name(record, "Similarity Report", "html"))
 
 
 @app.route("/api/report/<uuid:scan_uuid>/heatmap.png", methods=["GET"])
@@ -1036,12 +1069,17 @@ def api_report_heatmap(scan_uuid):
         png = reporter.single_row_heatmap_png_bytes(ref, candidates, scores, threshold)
     else:
         png = reporter.heatmap_png_bytes(matrix, threshold)
-    return Response(png, mimetype="image/png")
+    title = "Similarity Heatmap"
+    if ref in names and len(names) > 1:
+        title = f"{title} - {os.path.splitext(ref)[0]}"
+    return _attachment(png, "image/png", _export_name(record, title, "png"))
 
 
 if __name__ == "__main__":
     repository.purge_expired()
+    debug_enabled = os.environ.get("FLASK_DEBUG") == "1"
     app.run(
-        debug=os.environ.get("FLASK_DEBUG") == "1",
-        port=int(os.environ.get("APP_PORT", "5000")),
+        debug=debug_enabled,
+        use_reloader=os.environ.get("FLASK_RELOAD", "1") != "0",
+        port=int(os.environ.get("APP_PORT", "5001")),
     )

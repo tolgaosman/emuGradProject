@@ -10,14 +10,15 @@ from tokenize import TokenError
 
 import matplotlib
 import pandas as pd
-import pymupdf
 import seaborn as sns
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from .language import CODE_LANGUAGES, blank_comments_and_strings
 from .matrix import ComparisonMatrix
 from .models.ast_model import _NormalizerNodeVisitor, extract_c_family_functions
+from .models.winnowing import WinnowingModel
 
 _C_STRUCT_LANGUAGES = frozenset({"java", "c", "cpp"})
 _PAIR_WORD_RE = re.compile(r"\w+")
@@ -46,7 +47,11 @@ _HEATMAP_DPI = 300
 _HEATMAP_ANNOTATE_MAX = 20
 #: `text.parse_math` off: upload names are user-controlled, and matplotlib
 #: would otherwise parse `$...$` in a tick label as mathtext (and can raise).
-_PLOT_RC = {"text.parse_math": False}
+_PLOT_RC = {"text.parse_math": False, "font.sans-serif": ["Segoe UI", "DejaVu Sans"]}
+_HEATMAP_CMAP = LinearSegmentedColormap.from_list(
+    "plagcheck_editorial",
+    ["#fafaf9", "#f4f4f5", "#fef3c7", "#fca5a5", "#b91c1c", "#7f1d1d"],
+)
 
 
 def _png_bytes(fig: Figure) -> bytes:
@@ -125,22 +130,29 @@ class ReportGenerator:
         side = min(_HEATMAP_MAX_INCHES, max(6.0, n * 0.6 + 2))
         df = pd.DataFrame(m.as_numpy(), index=m.names, columns=m.names)
         with matplotlib.rc_context(_PLOT_RC):
-            fig = Figure(figsize=(side, side * 0.85), layout="tight")
+            fig = Figure(figsize=(side, side * 0.82), layout="tight", facecolor="white")
             ax = fig.subplots()
             sns.heatmap(
                 df,
                 annot=n <= _HEATMAP_ANNOTATE_MAX,
                 fmt=".2f",
-                cmap="YlOrRd",
+                cmap=_HEATMAP_CMAP,
                 vmin=0,
                 vmax=1,
                 ax=ax,
-                linewidths=0.5,
+                linewidths=1.0,
+                linecolor="#ffffff",
+                cbar_kws={"shrink": 0.78, "aspect": 24},
+                annot_kws={"size": 8.5},
             )
+            ax.tick_params(axis="y", labelrotation=0, length=0, labelsize=8.5, colors="#27272a")
+            ax.tick_params(axis="x", length=0, labelsize=8.5, colors="#27272a")
             for i in range(n):
                 for j in range(n):
                     if i != j and m.get(i, j) >= threshold:
-                        ax.add_patch(Rectangle((j, i), 1, 1, fill=False, edgecolor="red", lw=2))
+                        ax.add_patch(
+                            Rectangle((j, i), 1, 1, fill=False, edgecolor="#991b1b", lw=1.4)
+                        )
             return _png_bytes(fig)
 
     def single_row_heatmap_png_bytes(
@@ -156,29 +168,31 @@ class ReportGenerator:
         width = min(_HEATMAP_MAX_INCHES, max(6.0, k * 1.1 + 3))
 
         with matplotlib.rc_context(_PLOT_RC):
-            fig = Figure(figsize=(width, 2.8), layout="tight")
+            fig = Figure(figsize=(width, 2.6), layout="tight", facecolor="white")
             ax = fig.subplots()
             sns.heatmap(
                 df,
                 annot=k <= _HEATMAP_ANNOTATE_MAX,
                 fmt=".2f",
-                cmap="YlOrRd",
+                cmap=_HEATMAP_CMAP,
                 vmin=0,
                 vmax=1,
                 ax=ax,
-                linewidths=1.0,
+                linewidths=1.2,
+                linecolor="#ffffff",
                 cbar=True,
-                annot_kws={"size": 11, "weight": "bold"},
+                annot_kws={"size": 10},
             )
             for j, score in enumerate(scores):
                 if score >= threshold:
-                    ax.add_patch(Rectangle((j, 0), 1, 1, fill=False, edgecolor="red", lw=3))
+                    ax.add_patch(
+                        Rectangle((j, 0), 1, 1, fill=False, edgecolor="#991b1b", lw=1.8)
+                    )
 
-            ax.tick_params(axis="y", labelrotation=0, labelsize=10)
-            ax.tick_params(axis="x", labelrotation=45, labelsize=10)
+            ax.tick_params(axis="y", labelrotation=0, labelsize=9.5, length=0, colors="#27272a")
+            ax.tick_params(axis="x", labelrotation=35, labelsize=9.5, length=0, colors="#27272a")
             for label in ax.get_xticklabels():
                 label.set_horizontalalignment("right")
-            ax.set_title(f"Similarity Matrix (vs {ref_name})", fontsize=12, pad=12, weight="bold")
             return _png_bytes(fig)
 
     def pair_pdf_bytes(
@@ -193,51 +207,34 @@ class ReportGenerator:
         threshold: float | None = None,
         mode: str | None = None,
         algorithm: str | None = None,
+        algorithm_scores: dict[str, float | None] | None = None,
+        per_model_spans: dict[str, dict[str, list[tuple[int, int]]]] | None = None,
+        scan_uuid: str | None = None,
     ) -> bytes:
         """Render one comparison as a printable PDF, without touching disk.
 
-        Both documents are reproduced in full and stacked (not side by side,
-        which would halve the usable width for no gain on long documents),
-        each with `spans_a`/`spans_b` highlighted. The spans must be the
-        *filtered* ones the scan scored with, so the PDF shows exactly the
-        evidence behind the score it prints in its header.
-
-        `score`/`threshold`/`mode`/`algorithm` are optional: when a scan
-        record can't be read back, the header simply omits those facts rather
-        than stating something the scan never produced.
+        When `algorithm_scores` and `per_model_spans` are provided, Page 1 shows
+        the model summary table + Coverage highlights, followed by one dedicated
+        page section per raw model (`[AST Structure]`, `TF-IDF Cosine`,
+        `Winnowing`, `Jaccard`).
         """
-        meta = []
-        if score is not None:
-            meta.append(f"Similarity {score * 100:.1f}%")
-            if threshold is not None:
-                meta.append("Flagged" if score >= threshold else "Below threshold")
-        if threshold is not None:
-            meta.append(f"threshold {threshold:.2f}")
-        if mode:
-            meta.append(html.escape(mode))
-        if algorithm:
-            meta.append(html.escape(algorithm))
+        from .pdf_report import build_pair_pdf_bytes
 
-        page = _PDF_TEMPLATE.format(
-            name_a=html.escape(name_a),
-            name_b=html.escape(name_b),
-            meta=" &middot; ".join(meta) or "Matched regions highlighted",
-            body_a=_segments_to_html(_wrap_segments(_highlight_segments(text_a, spans_a))),
-            body_b=_segments_to_html(_wrap_segments(_highlight_segments(text_b, spans_b))),
+        return build_pair_pdf_bytes(
+            name_a=name_a,
+            text_a=text_a,
+            spans_a=spans_a,
+            name_b=name_b,
+            text_b=text_b,
+            spans_b=spans_b,
+            score=score,
+            threshold=threshold,
+            mode=mode,
+            algorithm=algorithm,
+            algorithm_scores=algorithm_scores,
+            per_model_spans=per_model_spans,
+            scan_uuid=scan_uuid,
         )
-
-        story = pymupdf.Story(html=page, user_css=_PDF_CSS)
-        buf = io.BytesIO()
-        writer = pymupdf.DocumentWriter(buf)
-        content = pymupdf.paper_rect("a4") + (36, 36, -36, -36)
-        more = 1
-        while more:
-            device = writer.begin_page(pymupdf.paper_rect("a4"))
-            more, _ = story.place(content)
-            story.draw(device)
-            writer.end_page()
-        writer.close()
-        return buf.getvalue()
 
     def html_report(
         self,
@@ -629,6 +626,85 @@ def paired_spans(
     ]
 
 
+#: Share of the cosine dot product the highlighted terms must account for.
+#: Rare shared words contribute almost nothing to the score, so marking every
+#: one would paint most of a document for a few percent of the similarity.
+_COSINE_MASS = 0.8
+
+
+def _shared_term_spans(
+    tokens_a: list[tuple[str, int, int]],
+    tokens_b: list[tuple[str, int, int]],
+    terms: set[str],
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    return (
+        _merge_spans([(s, e) for t, s, e in tokens_a if t in terms]),
+        _merge_spans([(s, e) for t, s, e in tokens_b if t in terms]),
+    )
+
+
+def model_spans(
+    text_a: str,
+    text_b: str,
+    language_a: str,
+    language_b: str,
+    preprocessor,
+) -> dict[str, dict[str, list[tuple[int, int]]]]:
+    """Per-model highlight ranges: what each raw model counted as shared.
+
+    - `jaccard`: every token whose stem occurs in both documents.
+    - `cosine`: the shared stems that carry `_COSINE_MASS` of the TF-IDF dot
+      product (shared terms all have the same IDF in a two-document corpus, so
+      a term's weight is its count in A times its count in B).
+    - `winnowing`: the k-grams winnowing selected as fingerprints in both.
+    - `ast`: structurally identical functions/classes (Python pairs only,
+      matching where the AST model scores at all).
+
+    Unlike coverage spans these are not filtered by `min_match_words`: the
+    word-level models have no multi-word runs to filter.
+    """
+    tokens_a = _spanned_tokens(text_a, language_a, preprocessor)
+    tokens_b = _spanned_tokens(text_b, language_b, preprocessor)
+    stems_a = [t for t, _, _ in tokens_a]
+    stems_b = [t for t, _, _ in tokens_b]
+    shared = set(stems_a) & set(stems_b)
+
+    jaccard = _shared_term_spans(tokens_a, tokens_b, shared)
+
+    weights = {t: stems_a.count(t) * stems_b.count(t) for t in shared}
+    budget, kept, running = sum(weights.values()) * _COSINE_MASS, set(), 0
+    for term, weight in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
+        if running >= budget:
+            break
+        kept.add(term)
+        running += weight
+    cosine = _shared_term_spans(tokens_a, tokens_b, kept)
+
+    winnow = WinnowingModel()
+    picked_a = winnow.selected(stems_a)
+    picked_b = winnow.selected(stems_b)
+    common = {h for _, h in picked_a} & {h for _, h in picked_b}
+    k = winnow.k
+
+    def winnow_spans(tokens, picked):
+        return _merge_spans(
+            [(tokens[i][1], tokens[i + k - 1][2]) for i, h in picked if h in common]
+        )
+
+    if language_a == "python" and language_b == "python":
+        ast_spans = _structural_spans(text_a, text_b, language_a, language_b)
+    else:
+        ast_spans = ([], [])
+
+    results = {
+        "cosine": cosine,
+        "winnowing": (winnow_spans(tokens_a, picked_a), winnow_spans(tokens_b, picked_b)),
+        "jaccard": jaccard,
+        "ast": ast_spans,
+    }
+    return {name: {"a": a, "b": b} for name, (a, b) in results.items()}
+
+
 def _highlight_segments(text: str, spans: list[tuple[int, int]]) -> list[tuple[str, bool]]:
     """Split `text` into `(chunk, is_matched)` pairs along `spans`.
 
@@ -715,7 +791,7 @@ def _render_summary(flagged: list[dict], thr: float) -> str:
         for p in flagged
     )
     return (
-        '<table class="summary"><thead><tr><th>File A</th><th>File B</th>'
+        '<table class="summary"><thead><tr><th>Reference File</th><th>File to be Checked</th>'
         "<th>Score</th><th>Matched 5-grams</th><th>Status</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
@@ -730,7 +806,7 @@ def _render_flat_table(flagged: list[dict]) -> str:
         for p in flagged
     )
     return (
-        '<table class="summary"><thead><tr><th>File A</th><th>File B</th>'
+        '<table class="summary"><thead><tr><th>Reference File</th><th>File to be Checked</th>'
         f"<th>Score</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table>"
     )
 
@@ -793,36 +869,6 @@ _PAIR_TEMPLATE = """
     <pre class="pane"><code>{text_b}</code></pre>
   </div>
 </details>
-"""
-
-#: Print stylesheet for `pair_pdf_bytes`. Deliberately light-only — this is
-#: paper output, so the dark-mode block in `_PAGE_TEMPLATE` has no meaning
-#: here. Kept to the CSS subset MuPDF's story engine actually supports.
-_PDF_CSS = """
-body { font-family: sans-serif; font-size: 9pt; color: #171717; }
-h1 { font-size: 13pt; margin: 0 0 2pt 0; }
-.names { font-size: 10pt; margin: 0 0 2pt 0; }
-.meta { font-size: 8pt; color: #737373; margin: 0 0 10pt 0; }
-h2 {
-  font-size: 9pt; color: #737373; margin: 12pt 0 4pt 0;
-  border-bottom: 1px solid #e5e5e5; padding-bottom: 2pt;
-}
-pre {
-  font-family: monospace; font-size: 7.5pt; line-height: 1.35;
-  white-space: pre-wrap; margin: 0;
-}
-mark { background-color: #fde68a; }
-"""
-
-_PDF_TEMPLATE = """<html><body>
-<h1>PlagCheck Similarity Report</h1>
-<p class="names">{name_a} &harr; {name_b}</p>
-<p class="meta">{meta}</p>
-<h2>Reference &mdash; {name_a}</h2>
-<pre>{body_a}</pre>
-<h2>Compared &mdash; {name_b}</h2>
-<pre>{body_b}</pre>
-</body></html>
 """
 
 _PAGE_TEMPLATE = """<!DOCTYPE html>

@@ -127,6 +127,20 @@
   border-radius: var(--radius-lg);
 }
 
+.sidebar-files-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-files-count {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
 .crash {
   display: grid;
   place-items: center;
