@@ -14,8 +14,6 @@ interface SimilarityIndexPanelProps {
   onInspectSource?: (fileA: string, fileB: string) => void
 }
 
-/** Turnitin-style per-document index: how much of each document matches
- * *anything* else in the scan — distinct from any single pair's score. */
 export function SimilarityIndexPanel({
   indices,
   breakdowns,
@@ -30,14 +28,9 @@ export function SimilarityIndexPanel({
   return (
     <section className="card" aria-labelledby="similarity-index-title">
       <header className="card-head">
-        <div>
-          <h2 id="similarity-index-title" className="card-title">
-            Per-document similarity index
-          </h2>
-          <p className="card-subtitle">
-            Asymmetric share of each submission matched anywhere else in this batch — click a source to inspect.
-          </p>
-        </div>
+        <h2 id="similarity-index-title" className="card-title">
+          Similarity index
+        </h2>
       </header>
       <ul className="index-list">
         {entries.map(([name, index]) => {
@@ -50,9 +43,7 @@ export function SimilarityIndexPanel({
                   <span className="index-name truncate" title={name}>
                     {name}
                   </span>
-                  {words !== undefined && (
-                    <span className="index-words num">{words.toLocaleString()} words</span>
-                  )}
+                  {words !== undefined && <span className="index-words num">{words.toLocaleString()}w</span>}
                 </div>
                 <div className="index-score-group">
                   <RiskPill score={index} />
@@ -70,9 +61,8 @@ export function SimilarityIndexPanel({
                   transition={spring.gentle}
                 />
               </span>
-              {sources.length > 0 ? (
+              {sources.length > 0 && (
                 <div className="index-sources">
-                  <span className="index-sources-label">Top sources:</span>
                   {sources.map((s) =>
                     onInspectSource ? (
                       <button
@@ -95,8 +85,6 @@ export function SimilarityIndexPanel({
                     ),
                   )}
                 </div>
-              ) : (
-                <p className="index-clean">No overlapping passages above the minimum word filter.</p>
               )}
             </li>
           )

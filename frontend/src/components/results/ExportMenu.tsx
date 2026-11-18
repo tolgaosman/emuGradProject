@@ -4,11 +4,11 @@ import type { KeyboardEvent } from 'react'
 import { EASE_OUT } from '../../lib/motion'
 import { ChevronIcon, DownloadIcon } from '../icons'
 
-export type ExportKind = 'html' | 'csv' | 'heatmap'
+export type ExportKind = 'pdf' | 'xlsx' | 'heatmap'
 
 const ITEMS: readonly { kind: ExportKind; label: string; detail: string }[] = [
-  { kind: 'html', label: 'Full report', detail: 'HTML · highlighted pairs' },
-  { kind: 'csv', label: 'Similarity matrix', detail: 'CSV · every score' },
+  { kind: 'pdf', label: 'Full report', detail: 'PDF · summary & highlights' },
+  { kind: 'xlsx', label: 'Excel report', detail: 'XLSX · pairs, matrix & files' },
   { kind: 'heatmap', label: 'Heatmap', detail: 'PNG · 300 DPI' },
 ]
 

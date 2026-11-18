@@ -915,6 +915,83 @@ def api_report_csv(scan_uuid):
     return _attachment(matrix.to_csv(), "text/csv", f"plagcheck-{scan_uuid[:8]}-matrix.csv")
 
 
+@app.route("/api/report/<uuid:scan_uuid>/matrix.xlsx", methods=["GET"])
+def api_report_xlsx(scan_uuid):
+    """Download the styled 3-sheet Excel similarity workbook (.xlsx)."""
+    scan_uuid = str(scan_uuid)
+    record = _require_scan(scan_uuid)
+    sidecar = repository.load_sidecar(scan_uuid) or {}
+    min_match_words = record.get("min_match_words")
+    if min_match_words is None:
+        min_match_words = int(sidecar.get("min_match_words", DEFAULT_MIN_MATCH_WORDS))
+    similarity_indices = {
+        f["file_name"]: f["similarity_index"]
+        for f in record.get("files", [])
+        if f.get("similarity_index") is not None
+    }
+    xlsx = reporter.excel_bytes(
+        _matrix_from_record(record),
+        threshold=record.get("threshold", DEFAULT_THRESHOLD),
+        pairs=record.get("pairs"),
+        mode=record.get("mode") or record.get("algorithm") or "text_similarity",
+        algorithm=record.get("algorithm_override"),
+        min_match_words=min_match_words,
+        similarity_indices=similarity_indices,
+        source_breakdowns=sidecar.get("source_breakdowns"),
+        scan_uuid=scan_uuid,
+        created_at=record.get("created_at"),
+    )
+    return _attachment(
+        xlsx,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        f"plagcheck-{scan_uuid[:8]}-report.xlsx",
+    )
+
+
+@app.route("/api/report/<uuid:scan_uuid>/report.pdf", methods=["GET"])
+def api_report_pdf(scan_uuid):
+    """Download the complete multi-page PDF similarity report."""
+    scan_uuid = str(scan_uuid)
+    record = _require_scan(scan_uuid)
+    sidecar = repository.load_sidecar(scan_uuid)
+    texts = sidecar.get("files") if sidecar else None
+    min_match_words = record.get("min_match_words")
+    if min_match_words is None:
+        min_match_words = (
+            int(sidecar.get("min_match_words", DEFAULT_MIN_MATCH_WORDS))
+            if sidecar
+            else DEFAULT_MIN_MATCH_WORDS
+        )
+    preprocessor = (
+        _preprocessor_for(
+            tuple(sidecar.get("excluded_terms") or ()),
+            bool(sidecar.get("use_default_exclusions", True)),
+        )
+        if sidecar and texts
+        else None
+    )
+    similarity_indices = {
+        f["file_name"]: f["similarity_index"]
+        for f in record.get("files", [])
+        if f.get("similarity_index") is not None
+    }
+    pdf = reporter.full_pdf_bytes(
+        _matrix_from_record(record),
+        threshold=record.get("threshold", DEFAULT_THRESHOLD),
+        file_data=texts,
+        preprocessor=preprocessor,
+        min_match_words=min_match_words,
+        pairs=record.get("pairs"),
+        algorithm=record.get("algorithm_override"),
+        mode=record.get("mode") or record.get("algorithm"),
+        similarity_indices=similarity_indices,
+        source_breakdowns=sidecar.get("source_breakdowns") if sidecar else None,
+        scan_uuid=scan_uuid,
+        created_at=record.get("created_at"),
+    )
+    return _attachment(pdf, "application/pdf", f"plagcheck-{scan_uuid[:8]}-report.pdf")
+
+
 @app.route("/api/report/<uuid:scan_uuid>/report.html", methods=["GET"])
 def api_report_html(scan_uuid):
     """Download the self-contained HTML comparison report (FR-09).

@@ -8,12 +8,10 @@ interface HeatmapGridProps {
   names: string[]
   scores: number[][]
   threshold: number
-  /** One-to-many shows only this row; a batch shows the upper triangle. */
   reference?: string
   onSelect: (fileA: string, fileB: string) => void
 }
 
-/** Intensity above which a cell's label switches to light text. */
 const STRONG_INTENSITY = 0.55
 
 export function HeatmapGrid({ names, scores, threshold, reference, onSelect }: HeatmapGridProps) {
@@ -59,17 +57,16 @@ export function HeatmapGrid({ names, scores, threshold, reference, onSelect }: H
     <div className="heatmap-wrap">
       <div className="heatmap-toolbar">
         <div className="heatmap-legend" aria-label="Matrix color scale">
-          <span className="heatmap-legend-label num">0%</span>
+          <span className="num">0%</span>
           <span className="heatmap-legend-ramp" aria-hidden="true" />
-          <span className="heatmap-legend-label num">100%</span>
-          <span className="heatmap-legend-flag">
-            <span className="heatmap-legend-swatch" aria-hidden="true" />
-            Flagged ≥ {formatPercent(threshold)}
+          <span className="num">100%</span>
+          <span className="heatmap-legend-flag num">
+            <span className="heatmap-legend-swatch" aria-hidden="true" />≥ {formatPercent(threshold)}
           </span>
         </div>
 
         <div className="heatmap-readout" aria-live="polite">
-          {active && activeScore !== null ? (
+          {active && activeScore !== null && (
             <>
               <span className="truncate">{names[active.row]}</span>
               <span aria-hidden="true">↔</span>
@@ -77,8 +74,6 @@ export function HeatmapGrid({ names, scores, threshold, reference, onSelect }: H
               <strong className="num">{formatPercent(activeScore)}</strong>
               <RiskPill score={activeScore} />
             </>
-          ) : (
-            <span className="heatmap-readout-idle">Hover or arrow-key any cell to preview · click to open</span>
           )}
         </div>
       </div>

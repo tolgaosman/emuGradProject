@@ -91,9 +91,9 @@
   --radius-full: 999px;
 
   /* Layout */
-  --header-h: 56px;
-  --content-max: 1480px;
-  --sidebar-w: clamp(320px, 28vw, 410px);
+  --header-h: 52px;
+  --content-max: 100%;
+  --sidebar-w: 336px;
 
   /* Motion */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);

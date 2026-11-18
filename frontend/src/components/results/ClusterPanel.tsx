@@ -1,41 +1,22 @@
 import type { CopyCluster, ResultRow } from '../../lib/deriveResults'
-import { formatPercent, pluralize } from '../../lib/format'
+import { formatPercent } from '../../lib/format'
 import { ClusterIcon, CompareIcon } from '../icons'
 import { RiskPill } from './RiskPill'
 
 interface ClusterPanelProps {
   clusters: readonly CopyCluster[]
-  threshold: number
   onOpenPair: (row: ResultRow) => void
 }
 
-export function ClusterPanel({ clusters, threshold, onOpenPair }: ClusterPanelProps) {
-  if (clusters.length === 0) {
-    return (
-      <section className="card" aria-label="Collusion clusters">
-        <header className="card-head">
-          <div>
-            <h2 className="card-title">Copy clusters</h2>
-            <p className="card-subtitle">
-              No connected document groups meet the {formatPercent(threshold)} review threshold.
-            </p>
-          </div>
-        </header>
-      </section>
-    )
-  }
+export function ClusterPanel({ clusters, onOpenPair }: ClusterPanelProps) {
+  if (clusters.length === 0) return null
 
   return (
     <section className="card" aria-labelledby="clusters-title">
       <header className="card-head">
-        <div>
-          <h2 id="clusters-title" className="card-title">
-            Flagged copy clusters ({clusters.length})
-          </h2>
-          <p className="card-subtitle">
-            Connected groups of submissions linked by pairs at or above {formatPercent(threshold)}.
-          </p>
-        </div>
+        <h2 id="clusters-title" className="card-title">
+          Clusters ({clusters.length})
+        </h2>
       </header>
       <div className="cluster-list">
         {clusters.map((cluster, idx) => {
@@ -45,12 +26,10 @@ export function ClusterPanel({ clusters, threshold, onOpenPair }: ClusterPanelPr
               <div className="cluster-card-head">
                 <div className="cluster-heading">
                   <span className="cluster-badge num">
-                    <ClusterIcon size={13} />
-                    Group {idx + 1}
+                    <ClusterIcon size={13} />#{idx + 1}
                   </span>
                   <span className="cluster-stats num">
-                    {pluralize(cluster.members.length, 'document')} · {pluralize(cluster.pairs.length, 'flagged link')} · mean{' '}
-                    {formatPercent(cluster.meanScore)}
+                    {cluster.members.length} files · mean {formatPercent(cluster.meanScore)}
                   </span>
                 </div>
                 <div className="cluster-actions">
@@ -62,7 +41,7 @@ export function ClusterPanel({ clusters, threshold, onOpenPair }: ClusterPanelPr
                       onClick={() => onOpenPair(topPair)}
                     >
                       <CompareIcon size={13} />
-                      Inspect top ({formatPercent(topPair.score)})
+                      Inspect
                     </button>
                   )}
                 </div>
@@ -75,24 +54,6 @@ export function ClusterPanel({ clusters, threshold, onOpenPair }: ClusterPanelPr
                   </span>
                 ))}
               </div>
-
-              {cluster.pairs.length > 1 && (
-                <div className="cluster-links">
-                  {cluster.pairs.slice(0, 4).map((pair) => (
-                    <button
-                      key={pair.id}
-                      type="button"
-                      className="cluster-link-chip"
-                      onClick={() => onOpenPair(pair)}
-                    >
-                      <span className="truncate">{pair.fileA}</span>
-                      <span aria-hidden="true">↔</span>
-                      <span className="truncate">{pair.fileB}</span>
-                      <strong className="num">{formatPercent(pair.score)}</strong>
-                    </button>
-                  ))}
-                </div>
-              )}
             </article>
           )
         })}
@@ -100,4 +61,3 @@ export function ClusterPanel({ clusters, threshold, onOpenPair }: ClusterPanelPr
     </section>
   )
 }
-

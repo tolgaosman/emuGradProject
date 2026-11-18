@@ -265,6 +265,70 @@ class ReportGenerator:
             body += _render_flat_table(flagged)
         return _PAGE_TEMPLATE.format(body=body, flagged_count=len(flagged), threshold=threshold)
 
+    def excel_bytes(
+        self,
+        m: ComparisonMatrix,
+        threshold: float = 0.70,
+        pairs: list[dict] | None = None,
+        mode: str = "text_similarity",
+        algorithm: str | None = None,
+        min_match_words: int = 8,
+        similarity_indices: dict[str, float] | None = None,
+        source_breakdowns: dict[str, list[dict]] | None = None,
+        scan_uuid: str | None = None,
+        created_at: str | None = None,
+    ) -> bytes:
+        """Render the styled 3-sheet `.xlsx` similarity workbook in memory."""
+        from .excel_export import build_workbook_bytes
+
+        return build_workbook_bytes(
+            matrix=m,
+            threshold=threshold,
+            pairs=pairs,
+            mode=mode,
+            algorithm=algorithm,
+            min_match_words=min_match_words,
+            similarity_indices=similarity_indices,
+            source_breakdowns=source_breakdowns,
+            scan_uuid=scan_uuid,
+            created_at=created_at,
+        )
+
+    def full_pdf_bytes(
+        self,
+        m: ComparisonMatrix,
+        threshold: float = 0.70,
+        file_data: dict | None = None,
+        preprocessor=None,
+        min_match_words: int = 0,
+        pairs: list[dict] | None = None,
+        algorithm: str | None = None,
+        mode: str | None = None,
+        similarity_indices: dict[str, float] | None = None,
+        source_breakdowns: dict[str, list[dict]] | None = None,
+        scan_uuid: str | None = None,
+        created_at: str | None = None,
+    ) -> bytes:
+        """Render the complete multi-page PDF similarity report in memory."""
+        from .pdf_report import build_full_pdf_bytes
+
+        heatmap_png = self.heatmap_png_bytes(m, threshold) if len(m.names) >= 2 else None
+        return build_full_pdf_bytes(
+            matrix=m,
+            threshold=threshold,
+            file_data=file_data,
+            preprocessor=preprocessor,
+            min_match_words=min_match_words,
+            pairs=pairs,
+            algorithm=algorithm,
+            mode=mode,
+            similarity_indices=similarity_indices,
+            source_breakdowns=source_breakdowns,
+            heatmap_png=heatmap_png,
+            scan_uuid=scan_uuid,
+            created_at=created_at,
+        )
+
 
 # --------------------------------------------------------------------------
 # Matched-span detection: reuses the preprocessor's stemmer/stopword set so

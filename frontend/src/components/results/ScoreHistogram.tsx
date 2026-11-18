@@ -16,15 +16,12 @@ export function ScoreHistogram({ bins, threshold, meanScore, onSelectThreshold }
   const thresholdPct = Math.max(0, Math.min(100, threshold * 100))
 
   return (
-    <section className="histogram-card" aria-label="Score distribution and threshold calibration">
+    <section className="histogram-card" aria-label="Score distribution">
       <div className="histogram-head">
-        <div className="histogram-titles">
-          <span className="histogram-title">Pair score distribution</span>
-          <span className="histogram-sub num">
-            Batch mean {formatPercent(meanScore)} · click a bar to calibrate threshold
-          </span>
-        </div>
-        <span className="histogram-threshold-pill num">Threshold ≥ {formatPercent(threshold)}</span>
+        <span className="histogram-title">Distribution</span>
+        <span className="histogram-sub num">
+          Mean {formatPercent(meanScore)} · Flag ≥ {formatPercent(threshold)}
+        </span>
       </div>
 
       <div className="histogram-plot">
@@ -46,8 +43,8 @@ export function ScoreHistogram({ bins, threshold, meanScore, onSelectThreshold }
                 className="histogram-bin"
                 data-flagged={isAbove || undefined}
                 data-nonempty={bin.count > 0 || undefined}
-                title={`${rangeLabel}: ${bin.count} ${bin.count === 1 ? 'pair' : 'pairs'} · click to set threshold to ${formatPercent(targetThreshold)}`}
-                aria-label={`${rangeLabel}, ${bin.count} pairs. Set threshold to ${formatPercent(targetThreshold)}`}
+                title={`${rangeLabel}: ${bin.count} — set threshold to ${formatPercent(targetThreshold)}`}
+                aria-label={`${rangeLabel}, ${bin.count} pairs`}
                 onClick={() => onSelectThreshold(targetThreshold)}
               >
                 <span className="histogram-bin-count num">{bin.count > 0 ? bin.count : ''}</span>
@@ -55,7 +52,7 @@ export function ScoreHistogram({ bins, threshold, meanScore, onSelectThreshold }
                   <motion.span
                     className="histogram-bar-fill"
                     initial={{ scaleY: 0 }}
-                    animate={{ scaleY: bin.count > 0 ? Math.max(0.12, ratio) : 0.03 }}
+                    animate={{ scaleY: bin.count > 0 ? Math.max(0.14, ratio) : 0.04 }}
                     transition={spring.gentle}
                   />
                 </span>
@@ -68,4 +65,3 @@ export function ScoreHistogram({ bins, threshold, meanScore, onSelectThreshold }
     </section>
   )
 }
-

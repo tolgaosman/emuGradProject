@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import type { Algorithm, Mode, SamplePreset } from '../../api/types'
+import type { Mode, SamplePreset } from '../../api/types'
 import type { ScanState } from '../../hooks/useScan'
 import type { ResultRow, ResultsModel } from '../../lib/deriveResults'
 import { panelMotion } from '../../lib/motion'
@@ -13,11 +13,8 @@ interface ResultsCanvasProps {
   state: ScanState
   model: ResultsModel | null
   mode: Mode
-  algorithm: Algorithm
+  disabled?: boolean
   threshold: number
-  minMatchWords: number
-  useDefaultExclusions: boolean
-  excludedCount: number
   settingsChanged: boolean
   selectedId: string | null
   exportBusy: ExportKind | null
@@ -30,16 +27,12 @@ interface ResultsCanvasProps {
   onReset: () => void
 }
 
-/** The right-hand column: one view per scan state, cross-faded. */
 export function ResultsCanvas({
   state,
   model,
   mode,
-  algorithm,
+  disabled,
   threshold,
-  minMatchWords,
-  useDefaultExclusions,
-  excludedCount,
   settingsChanged,
   selectedId,
   exportBusy,
@@ -55,18 +48,8 @@ export function ResultsCanvas({
 
   return (
     <AnimatePresence mode="wait" initial={false}>
-      <motion.div key={key} {...panelMotion}>
-        {state.status === 'idle' && (
-          <IdleState
-            mode={mode}
-            threshold={threshold}
-            algorithm={algorithm}
-            minMatchWords={minMatchWords}
-            useDefaultExclusions={useDefaultExclusions}
-            excludedCount={excludedCount}
-            onRunSample={onRunSample}
-          />
-        )}
+      <motion.div key={key} className="canvas-frame" {...panelMotion}>
+        {state.status === 'idle' && <IdleState mode={mode} disabled={disabled} onRunSample={onRunSample} />}
 
         {(state.status === 'uploading' || state.status === 'processing' || state.status === 'loading') && (
           <ProgressState phase={state.status} />
@@ -87,7 +70,6 @@ export function ResultsCanvas({
             result={state.result}
             model={model}
             threshold={threshold}
-            source={state.meta.source}
             settingsChanged={settingsChanged}
             selectedId={selectedId}
             exportBusy={exportBusy}

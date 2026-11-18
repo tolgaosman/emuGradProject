@@ -562,3 +562,53 @@ def test_check_expands_zip_archive(client):
     assert resp.status_code == 200
     assert sorted(body["matrix"]["names"]) == ["sub1.txt", "sub2.txt"]
     assert body["pairs"][0]["score"] > 0.9
+
+
+def test_report_xlsx_and_full_pdf_exports(client):
+    """Both `/matrix.xlsx` and `/report.pdf` stream valid binary attachments
+    with proper MIME types and Content-Disposition headers."""
+    import zipfile
+
+    import pymupdf
+
+    prose = "machine learning models require careful validation before production release " * 5
+    scan_id = _scan_id(
+        client,
+        **{
+            "CMSE 473, Midterm (1).txt": prose,
+            "CMSE 473, Midterm (2).txt": prose,
+            "other.txt": "completely unrelated short note on compilers and parsers",
+        },
+    )
+
+    xlsx_resp = client.get(f"/api/report/{scan_id}/matrix.xlsx")
+    assert xlsx_resp.status_code == 200
+    assert (
+        xlsx_resp.mimetype
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert xlsx_resp.headers["Content-Disposition"].startswith("attachment;")
+    assert ".xlsx" in xlsx_resp.headers["Content-Disposition"]
+    with zipfile.ZipFile(io.BytesIO(xlsx_resp.data)) as zf:
+        assert "xl/worksheets/sheet1.xml" in zf.namelist()
+        assert "CMSE 473, Midterm (1).txt" in zf.read("xl/sharedStrings.xml").decode("utf-8")
+
+    pdf_resp = client.get(f"/api/report/{scan_id}/report.pdf")
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.mimetype == "application/pdf"
+    assert pdf_resp.headers["Content-Disposition"].startswith("attachment;")
+    assert ".pdf" in pdf_resp.headers["Content-Disposition"]
+    assert pdf_resp.data[:5] == b"%PDF-"
+    with pymupdf.open("pdf", pdf_resp.data) as doc:
+        full_text = "".join(page.get_text() for page in doc)
+    assert "CMSE 473, Midterm (1).txt" in full_text
+    assert "FLAGGED" in full_text
+
+    assert (
+        client.get("/api/report/00000000-0000-0000-0000-000000000000/matrix.xlsx").status_code
+        == 404
+    )
+    assert (
+        client.get("/api/report/00000000-0000-0000-0000-000000000000/report.pdf").status_code
+        == 404
+    )

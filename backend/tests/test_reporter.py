@@ -259,3 +259,118 @@ def test_paired_spans_links_prose_and_c_family_renamed_code():
     assert spans_a and spans_b
     struct_linked = paired_spans(cpp_a, cpp_b, "cpp", "cpp", pre, min_match_words=5)
     assert any(item["kind"] == "structural" for item in struct_linked)
+
+
+def test_excel_bytes_builds_valid_three_sheet_ooxml_workbook():
+    """excel_bytes emits a valid 3-sheet .xlsx ZIP package with well-formed XML
+    parts, numeric similarity scores, and preserved non-ASCII filenames."""
+    import io
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    m = ComparisonMatrix(["Ödev_1, final.docx", "Ödev_2.docx", "unrelated.txt"])
+    m.set(0, 1, 0.92)
+    m.set(0, 2, 0.22)
+    m.set(1, 2, 0.05)
+
+    xlsx = ReportGenerator().excel_bytes(
+        m,
+        threshold=0.70,
+        pairs=[
+            {"file_a": "Ödev_1, final.docx", "file_b": "Ödev_2.docx", "score": 0.92,
+             "matched_kgrams": 41, "flagged": True},
+            {"file_a": "Ödev_1, final.docx", "file_b": "unrelated.txt", "score": 0.22,
+             "matched_kgrams": 3, "flagged": False},
+            {"file_a": "Ödev_2.docx", "file_b": "unrelated.txt", "score": 0.05,
+             "flagged": False},
+        ],
+        mode="text_similarity",
+        algorithm="auto",
+        min_match_words=8,
+        similarity_indices={"Ödev_1, final.docx": 0.92, "Ödev_2.docx": 0.88, "unrelated.txt": 0.0},
+        source_breakdowns={
+            "Ödev_1, final.docx": [{"source": "Ödev_2.docx", "contribution": 0.92}],
+            "Ödev_2.docx": [{"source": "Ödev_1, final.docx", "contribution": 0.88}],
+        },
+        scan_uuid="12345678-1234-1234-1234-123456789abc",
+        created_at="2026-11-18T11:30:00Z",
+    )
+    assert xlsx[:2] == b"PK"
+    with zipfile.ZipFile(io.BytesIO(xlsx)) as zf:
+        names = set(zf.namelist())
+        assert {
+            "[Content_Types].xml",
+            "xl/workbook.xml",
+            "xl/styles.xml",
+            "xl/sharedStrings.xml",
+            "xl/worksheets/sheet1.xml",
+            "xl/worksheets/sheet2.xml",
+            "xl/worksheets/sheet3.xml",
+        }.issubset(names)
+        for member in names:
+            if member.endswith(".xml") or member.endswith(".rels"):
+                ET.fromstring(zf.read(member))
+        shared_xml = zf.read("xl/sharedStrings.xml").decode("utf-8")
+        assert "Ödev_1, final.docx" in shared_xml
+        assert "FLAGGED" in shared_xml
+
+    # Single-file empty-pair edge case must also serialize cleanly
+    single = ReportGenerator().excel_bytes(ComparisonMatrix(["solo.txt"]), threshold=0.70)
+    with zipfile.ZipFile(io.BytesIO(single)) as zf:
+        ET.fromstring(zf.read("xl/worksheets/sheet1.xml"))
+
+
+def test_full_pdf_bytes_embeds_summary_heatmap_and_highlighted_evidence():
+    """full_pdf_bytes renders an A4 multi-section PDF with summary tables,
+    embedded heatmap image, highlighted passages, and stamped page footers."""
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+    prose_a = (
+        "Distributed consensus protocols maintain state machine safety across "
+        "replicated cluster nodes during network partitions."
+    )
+    prose_b = (
+        "Summary: distributed consensus protocols maintain state machine safety across "
+        "replicated cluster nodes during network partitions!"
+    )
+    file_data = {
+        "İzin_A.txt": {"raw": prose_a, "language": "text"},
+        "B_copy.txt": {"raw": prose_b, "language": "text"},
+    }
+    m = ComparisonMatrix(["İzin_A.txt", "B_copy.txt"])
+    m.set(0, 1, 0.88)
+
+    pdf = ReportGenerator().full_pdf_bytes(
+        m,
+        threshold=0.70,
+        file_data=file_data,
+        preprocessor=pre,
+        min_match_words=5,
+        pairs=[{
+            "file_a": "İzin_A.txt",
+            "file_b": "B_copy.txt",
+            "score": 0.88,
+            "matched_kgrams": 11,
+            "flagged": True,
+        }],
+        algorithm="auto",
+        mode="text_similarity",
+        similarity_indices={"İzin_A.txt": 0.88, "B_copy.txt": 0.84},
+        source_breakdowns={"İzin_A.txt": [{"source": "B_copy.txt", "contribution": 0.88}]},
+        scan_uuid="abcdef12-0000-0000-0000-000000000000",
+        created_at="2026-11-18T11:30:00Z",
+    )
+    assert pdf[:5] == b"%PDF-"
+    text = _pdf_text(pdf)
+    assert "PlagCheck" in text
+    assert "İzin_A.txt" in text
+    assert "88.0%" in text
+    assert "FLAGGED" in text
+    assert "Page 1 of" in text
+    with pymupdf.open("pdf", pdf) as doc:
+        assert sum(len(page.get_images()) for page in doc) >= 1
+
+    # Unflagged / no-evidence scan renders cleanly too
+    low_m = ComparisonMatrix(["a.txt", "b.txt"])
+    low_m.set(0, 1, 0.12)
+    low_pdf = ReportGenerator().full_pdf_bytes(low_m, threshold=0.70)
+    assert "70% alert threshold" in _pdf_text(low_pdf)

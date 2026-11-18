@@ -110,10 +110,10 @@ export async function deleteScan(scanId: string): Promise<void> {
 }
 
 export const exportUrls = {
+  pdf: (scanId: string) => `${API_BASE}${reportPath(scanId)}/report.pdf`,
+  xlsx: (scanId: string) => `${API_BASE}${reportPath(scanId)}/matrix.xlsx`,
   heatmap: (scanId: string, ref?: string) =>
     `${API_BASE}${reportPath(scanId)}/heatmap.png?ref=${encodeURIComponent(ref ?? 'all')}`,
-  csv: (scanId: string) => `${API_BASE}${reportPath(scanId)}/matrix.csv`,
-  html: (scanId: string) => `${API_BASE}${reportPath(scanId)}/report.html`,
   pairPdf: (scanId: string, fileA: string, fileB: string) =>
     `${API_BASE}${pairPath('pair-pdf', scanId, fileA, fileB)}`,
 }

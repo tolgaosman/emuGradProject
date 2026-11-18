@@ -12,7 +12,6 @@ const FALLBACK_CHOICES: Record<Mode, Algorithm[]> = {
   text_similarity: ['auto', 'cosine', 'winnowing', 'jaccard'],
   code_similarity: ['auto', 'ast', 'winnowing', 'jaccard'],
 }
-const THRESHOLD_TICKS = [0.5, 0.7, 0.9]
 
 interface ScanSettingsProps {
   mode: Mode
@@ -109,7 +108,7 @@ export function ScanSettings({
       <div className="field">
         <div className="field-row">
           <label htmlFor={`${uid}-threshold`} className="field-label">
-            Flag for review at
+            Threshold
           </label>
           <output htmlFor={`${uid}-threshold`} className="field-value num">
             {formatPercent(threshold)}
@@ -128,21 +127,6 @@ export function ScanSettings({
           style={{ '--fill': `${((threshold - 0.05) / 0.94) * 100}%` } as CSSProperties}
           onChange={(e) => onThresholdChange(Number(e.target.value))}
         />
-        <div className="range-ticks" aria-hidden="true">
-          {THRESHOLD_TICKS.map((tick) => (
-            <button
-              key={tick}
-              type="button"
-              tabIndex={-1}
-              className="range-tick"
-              style={{ left: `${((tick - 0.05) / 0.94) * 100}%` }}
-              disabled={disabled}
-              onClick={() => onThresholdChange(tick)}
-            >
-              {formatPercent(tick)}
-            </button>
-          ))}
-        </div>
       </div>
 
       <button
@@ -152,10 +136,10 @@ export function ScanSettings({
         aria-controls={`${uid}-advanced`}
         onClick={() => setAdvancedToggle(!advancedOpen)}
       >
-        <span>Advanced & exclusions</span>
-        <span className="disclosure-summary">
-          {ALGORITHM_LABEL[algorithm]} · {minMatchWords}w min
-          {excludedTerms.length > 0 ? ` · +${excludedTerms.length} excl` : ''}
+        <span>Options</span>
+        <span className="disclosure-summary num">
+          {ALGORITHM_LABEL[algorithm]} · {minMatchWords}w
+          {excludedTerms.length > 0 ? ` · +${excludedTerms.length}` : ''}
         </span>
         <motion.span animate={{ rotate: advancedOpen ? 180 : 0 }} transition={{ duration: 0.2, ease: EASE_OUT }}>
           <ChevronIcon size={14} />
@@ -167,15 +151,15 @@ export function ScanSettings({
           <motion.div
             id={`${uid}-advanced`}
             className="advanced"
-            initial={{ opacity: 0, y: -6 }}
+            initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.2, ease: EASE_OUT }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18, ease: EASE_OUT }}
           >
             <div className="advanced-inner">
               <div className="field">
                 <span className="field-label" id={`${uid}-algorithm`}>
-                  Scoring engine
+                  Engine
                 </span>
                 <div className="chips" role="radiogroup" aria-labelledby={`${uid}-algorithm`} onKeyDown={handleChipKeys}>
                   {choices.map((choice, i) => (
@@ -189,24 +173,23 @@ export function ScanSettings({
                       aria-checked={choice === algorithm}
                       tabIndex={choice === algorithm ? 0 : -1}
                       className="chip"
+                      title={ALGORITHM_HINT[choice]}
                       disabled={disabled}
                       onClick={() => onAlgorithmChange(choice)}
                     >
                       {ALGORITHM_LABEL[choice]}
-                      {choice === 'auto' && <span className="chip-tag">Default</span>}
                     </button>
                   ))}
                 </div>
-                <p className="field-hint">{ALGORITHM_HINT[algorithm]}</p>
               </div>
 
               <div className="field">
                 <div className="field-row">
                   <label htmlFor={`${uid}-words`} className="field-label">
-                    Ignore matches shorter than
+                    Min match
                   </label>
                   <output htmlFor={`${uid}-words`} className="field-value num">
-                    {minMatchWords} {minMatchWords === 1 ? 'word' : 'words'}
+                    {minMatchWords}w
                   </output>
                 </div>
                 <input
@@ -222,7 +205,6 @@ export function ScanSettings({
                   style={{ '--fill': `${((minMatchWords - 1) / 24) * 100}%` } as CSSProperties}
                   onChange={(e) => onMinMatchWordsChange(Number(e.target.value))}
                 />
-                <p className="field-hint">Filters out short incidental phrases from scoring and highlights.</p>
               </div>
 
               {mode === 'text_similarity' && (
@@ -235,16 +217,16 @@ export function ScanSettings({
                         disabled={disabled}
                         onChange={(e) => onUseDefaultExclusionsChange(e.target.checked)}
                       />
-                      <span className="field-label">Academic boilerplate filter</span>
+                      <span className="field-label">Boilerplate filter</span>
                     </label>
                     <button type="button" className="btn btn-link" onClick={toggleDefaultListPreview}>
-                      {showDefaultTerms ? 'Hide terms' : 'View 50 terms'}
+                      {showDefaultTerms ? 'Hide' : '50 terms'}
                     </button>
                   </div>
                   {showDefaultTerms && (
                     <div className="term-cloud" aria-label="Default academic exclusions">
                       {defaultTerms === null ? (
-                        <span className="field-hint">Loading terms…</span>
+                        <span className="field-hint">Loading…</span>
                       ) : (
                         defaultTerms.map((term) => (
                           <span key={term} className="term-pill">
@@ -255,29 +237,25 @@ export function ScanSettings({
                     </div>
                   )}
 
-                  <label htmlFor={`${uid}-excl`} className="field-label exclusion-sub">
-                    Custom excluded terms
-                  </label>
-                  <div className="exclusion-input-row">
-                    <input
-                      id={`${uid}-excl`}
-                      type="text"
-                      className="text-input"
-                      placeholder="e.g. cmse405, eastern mediterranean"
-                      value={termDraft}
-                      disabled={disabled}
-                      onChange={(e) => setTermDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ',') {
-                          e.preventDefault()
-                          commitDraftTerms(termDraft)
-                        }
-                      }}
-                      onBlur={() => {
-                        if (termDraft.trim()) commitDraftTerms(termDraft)
-                      }}
-                    />
-                  </div>
+                  <input
+                    id={`${uid}-excl`}
+                    type="text"
+                    className="text-input"
+                    aria-label="Custom excluded words"
+                    placeholder="Exclude words (press Enter)…"
+                    value={termDraft}
+                    disabled={disabled}
+                    onChange={(e) => setTermDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault()
+                        commitDraftTerms(termDraft)
+                      }
+                    }}
+                    onBlur={() => {
+                      if (termDraft.trim()) commitDraftTerms(termDraft)
+                    }}
+                  />
                   {excludedTerms.length > 0 && (
                     <div className="term-cloud">
                       {excludedTerms.map((term) => (
@@ -286,7 +264,7 @@ export function ScanSettings({
                           <button
                             type="button"
                             className="term-pill-remove"
-                            aria-label={`Remove excluded term ${term}`}
+                            aria-label={`Remove ${term}`}
                             disabled={disabled}
                             onClick={() => removeCustomTerm(term)}
                           >

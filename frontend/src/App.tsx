@@ -12,7 +12,7 @@ import { ResultsCanvas } from './components/results/ResultsCanvas'
 import { RunBar } from './components/RunBar'
 import type { RunPhase } from './components/RunBar'
 import { ScanSettings } from './components/ScanSettings'
-import { WorkspaceTabs } from './components/WorkspaceTabs'
+import { Segmented } from './components/Segmented'
 import { useApiStatus } from './hooks/useApiStatus'
 import { useScan } from './hooks/useScan'
 import { useTheme } from './hooks/useTheme'
@@ -23,9 +23,14 @@ import { stem } from './lib/format'
 
 const DEFAULT_THRESHOLD = 0.7
 
+const WORKSPACE_OPTIONS: readonly { value: Workspace; label: string }[] = [
+  { value: 'one-to-many', label: 'One vs many' },
+  { value: 'batch', label: 'Batch' },
+]
+
 const EXPORT_NAMES: Record<ExportKind, string> = {
-  html: 'plagcheck-report.html',
-  csv: 'plagcheck-matrix.csv',
+  pdf: 'plagcheck-report.pdf',
+  xlsx: 'plagcheck-report.xlsx',
   heatmap: 'plagcheck-heatmap.png',
 }
 
@@ -57,12 +62,12 @@ function App() {
   const hasZipInBatch = workspace === 'batch' && batch.some((f) => f.name.toLowerCase().endsWith('.zip'))
 
   const blockedReason = (() => {
-    if (apiStatus.state === 'offline') return 'The PlagCheck server is unreachable.'
+    if (apiStatus.state === 'offline') return 'Server unreachable'
     if (workspace === 'batch') {
-      return batch.length < 2 && !hasZipInBatch ? 'Add at least two documents (or a .zip archive) to compare.' : null
+      return batch.length < 2 && !hasZipInBatch ? 'Add at least 2 files' : null
     }
-    if (reference.length === 0) return 'Add the document you want to check.'
-    if (candidates.length === 0) return 'Add at least one document to compare it with.'
+    if (reference.length === 0) return 'Add reference file'
+    if (candidates.length === 0) return 'Add comparison files'
     return null
   })()
 
@@ -108,7 +113,7 @@ function App() {
     setCandidates((list) => keptFiles(list, next).kept)
     setBatch((list) => keptFiles(list, next).kept)
     if (setAside > 0) {
-      toast.show(`${setAside} ${setAside === 1 ? 'file isn’t' : 'files aren’t'} accepted in this mode and was removed.`, 'error')
+      toast.show(`${setAside} incompatible ${setAside === 1 ? 'file' : 'files'} removed.`, 'error')
     }
   }
 
@@ -135,7 +140,7 @@ function App() {
 
   const runSample = (preset: SamplePreset) => {
     if (busy || apiStatus.state === 'offline') {
-      if (apiStatus.state === 'offline') toast.show('Start the local PlagCheck API server first.', 'error')
+      if (apiStatus.state === 'offline') toast.show('Start the local API server first.', 'error')
       return
     }
     const targetMode: Mode = preset === 'code' ? 'code_similarity' : 'text_similarity'
@@ -186,10 +191,10 @@ function App() {
     if (!result) return
     const scanId = result.scan_id
     const url =
-      kind === 'csv'
-        ? exportUrls.csv(scanId)
-        : kind === 'html'
-          ? exportUrls.html(scanId)
+      kind === 'xlsx'
+        ? exportUrls.xlsx(scanId)
+        : kind === 'pdf'
+          ? exportUrls.pdf(scanId)
           : exportUrls.heatmap(scanId, model?.kind === 'ready' ? model.reference : undefined)
     setExportBusy(kind)
     downloadFile(url, EXPORT_NAMES[kind])
@@ -212,7 +217,7 @@ function App() {
         : { phase: 'ready' }
 
   return (
-    <>
+    <div className="app-shell">
       <Header
         mode={mode}
         onModeChange={handleModeChange}
@@ -225,67 +230,71 @@ function App() {
       />
 
       <main className="page">
-        <h1 className="visually-hidden">PlagCheck — local similarity and plagiarism analysis</h1>
-        <WorkspaceTabs value={workspace} onChange={handleWorkspaceChange} disabled={busy} />
+        <h1 className="visually-hidden">PlagCheck</h1>
 
-        <div className="workspace" id="workspace-panel" role="tabpanel" aria-labelledby={`workspace-tab-${workspace}`}>
+        <div className="workspace" id="workspace-panel">
           <aside className="sidebar" aria-label="Scan setup">
-            <section className="panel" aria-labelledby="documents-title">
-              <h2 id="documents-title" className="panel-title">
-                <span className="panel-step num">1</span>
-                Documents
-              </h2>
-              {workspace === 'one-to-many' ? (
-                <>
-                  <DropZone
-                    label="Reference document"
-                    files={reference}
-                    onFilesChange={setReference}
-                    mode={mode}
-                    maxFiles={1}
+            <div className="sidebar-scroll">
+              <section className="panel">
+                <div className="sidebar-mode-row">
+                  <Segmented
+                    id="workspace-mode"
+                    label="Comparison mode"
+                    size="sm"
+                    options={WORKSPACE_OPTIONS}
+                    value={workspace}
+                    onChange={handleWorkspaceChange}
                     disabled={busy}
                   />
+                </div>
+
+                {workspace === 'one-to-many' ? (
+                  <>
+                    <DropZone
+                      label="Reference"
+                      files={reference}
+                      onFilesChange={setReference}
+                      mode={mode}
+                      maxFiles={1}
+                      disabled={busy}
+                    />
+                    <DropZone
+                      label="Candidates"
+                      files={candidates}
+                      onFilesChange={setCandidates}
+                      mode={mode}
+                      maxFiles={49}
+                      disabled={busy}
+                    />
+                  </>
+                ) : (
                   <DropZone
-                    label="Comparison candidates"
-                    files={candidates}
-                    onFilesChange={setCandidates}
+                    label="Submissions"
+                    files={batch}
+                    onFilesChange={setBatch}
                     mode={mode}
-                    maxFiles={49}
                     disabled={busy}
                   />
-                </>
-              ) : (
-                <DropZone
-                  label="Class / batch submissions"
-                  description="Compare every file with every other — supports folders & .zip archives."
-                  files={batch}
-                  onFilesChange={setBatch}
+                )}
+              </section>
+
+              <section className="panel">
+                <ScanSettings
                   mode={mode}
+                  algorithm={algorithm}
+                  onAlgorithmChange={setAlgorithm}
+                  threshold={threshold}
+                  onThresholdChange={setThreshold}
+                  minMatchWords={minMatchWords}
+                  onMinMatchWordsChange={setMinMatchWords}
+                  excludedTerms={excludedTerms}
+                  onExcludedTermsChange={setExcludedTerms}
+                  useDefaultExclusions={useDefaultExclusions}
+                  onUseDefaultExclusionsChange={setUseDefaultExclusions}
                   disabled={busy}
                 />
-              )}
-            </section>
-
-            <section className="panel" aria-labelledby="settings-title">
-              <h2 id="settings-title" className="panel-title">
-                <span className="panel-step num">2</span>
-                Review parameters
-              </h2>
-              <ScanSettings
-                mode={mode}
-                algorithm={algorithm}
-                onAlgorithmChange={setAlgorithm}
-                threshold={threshold}
-                onThresholdChange={setThreshold}
-                minMatchWords={minMatchWords}
-                onMinMatchWordsChange={setMinMatchWords}
-                excludedTerms={excludedTerms}
-                onExcludedTermsChange={setExcludedTerms}
-                useDefaultExclusions={useDefaultExclusions}
-                onUseDefaultExclusionsChange={setUseDefaultExclusions}
-                disabled={busy}
-              />
-            </section>
+              </section>
+            </div>
 
             <RunBar run={run} blockedReason={busy ? null : blockedReason} onRun={runScan} onCancel={handleReset} />
           </aside>
@@ -295,11 +304,8 @@ function App() {
               state={state}
               model={model}
               mode={mode}
-              algorithm={algorithm}
+              disabled={busy}
               threshold={threshold}
-              minMatchWords={minMatchWords}
-              useDefaultExclusions={useDefaultExclusions}
-              excludedCount={excludedTerms.length}
               settingsChanged={settingsChanged}
               selectedId={selected?.id ?? null}
               exportBusy={exportBusy}
@@ -349,7 +355,7 @@ function App() {
           />
         )}
       </AnimatePresence>
-    </>
+    </div>
   )
 }
 

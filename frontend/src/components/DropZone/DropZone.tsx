@@ -14,11 +14,9 @@ type Tab = 'upload' | 'paste'
 
 interface DropZoneProps {
   label: string
-  description?: string
   files: File[]
   onFilesChange: (files: File[]) => void
   mode: Mode
-  /** 1 makes a single slot: a new file replaces the current one. */
   maxFiles?: number
   disabled?: boolean
 }
@@ -71,7 +69,6 @@ async function readDroppedItems(dataTransfer: DataTransfer): Promise<File[]> {
 
 export function DropZone({
   label,
-  description,
   files,
   onFilesChange,
   mode,
@@ -122,7 +119,7 @@ export function DropZone({
     const previous = pasteFile.current
     if (!next && !previous) return
     if (next && !previous && !single && files.length >= maxFiles) {
-      setRejections([{ name: next.name, reason: `The ${maxFiles}-file limit is reached` }])
+      setRejections([{ name: next.name, reason: `Max ${maxFiles} files` }])
       return
     }
     pasteFile.current = next
@@ -171,16 +168,13 @@ export function DropZone({
   return (
     <section className="zone" aria-labelledby={`${uid}-label`} data-dragging={dragging || undefined} {...dragHandlers}>
       <div className="zone-head">
-        <div className="zone-heading">
-          <h3 id={`${uid}-label`} className="zone-title">
-            {label}
-            <span className="zone-count num">
-              {files.length}
-              {single ? '/1' : ''}
-            </span>
-          </h3>
-          {description && <p className="zone-description">{description}</p>}
-        </div>
+        <h3 id={`${uid}-label`} className="zone-title">
+          {label}
+          <span className="zone-count num">
+            {files.length}
+            {single ? '/1' : ''}
+          </span>
+        </h3>
         <div className="mini-tabs" role="tablist" aria-label={`${label}: input method`}>
           {(['upload', 'paste'] as const).map((value) => (
             <button
@@ -197,7 +191,7 @@ export function DropZone({
               {tab === value && (
                 <motion.span layoutId={`${uid}-tab`} className="mini-tab-thumb" transition={spring.snappy} />
               )}
-              <span className="mini-tab-label">{value === 'upload' ? 'Upload' : 'Paste'}</span>
+              <span className="mini-tab-label">{value === 'upload' ? 'Files' : 'Paste'}</span>
             </button>
           ))}
         </div>
@@ -208,22 +202,18 @@ export function DropZone({
           <label className="dropzone" data-disabled={disabled || undefined}>
             <motion.span
               className="dropzone-icon"
-              animate={dragging ? { y: -3, scale: 1.08 } : { y: 0, scale: 1 }}
+              animate={dragging ? { y: -2, scale: 1.06 } : { y: 0, scale: 1 }}
               transition={spring.snappy}
             >
-              <UploadIcon size={18} />
+              <UploadIcon size={16} />
             </motion.span>
             <span className="dropzone-text">
               <span className="dropzone-primary">
-                {dragging
-                  ? 'Drop files or folder'
-                  : single
-                    ? 'Choose a file or drop it here'
-                    : 'Drop files, a folder, or a .zip batch'}
+                {dragging ? 'Drop here' : single ? 'Drop file or browse' : 'Drop files, folder, or .zip'}
               </span>
               <span className="dropzone-secondary">
-                {extensions.join(' · ')}
-                {single ? ' · max 10 MB' : ` · .zip · up to ${maxFiles} files`}
+                {extensions.join(' ')}
+                {single ? '' : ' .zip'}
               </span>
             </span>
             <input
@@ -263,9 +253,9 @@ export function DropZone({
           <FileList files={files} onRemove={removeFile} disabled={disabled} />
           {files.length > 1 && (
             <div className="zone-foot">
-              <span className="zone-foot-meta num">Total {formatBytes(totalBytes)}</span>
+              <span className="zone-foot-meta num">{formatBytes(totalBytes)}</span>
               <button type="button" className="btn btn-link zone-clear" onClick={clearAll} disabled={disabled}>
-                Remove all
+                Clear
               </button>
             </div>
           )}

@@ -290,22 +290,16 @@ export function ComparisonInspector({
           </div>
         </header>
 
-        {data && (
+        {data && algoItems && (
           <div className="inspector-subbar">
-            <p className="inspector-legend">
-              Click any <mark>#match</mark> ({pluralize(data.min_match_words ?? 0, 'word')} min) to synchronize both
-              panes · <kbd>j</kbd>/<kbd>k</kbd> jump matches · <kbd>f</kbd> folds context.
-            </p>
-            {algoItems && (
-              <div className="algo-strip" aria-label="Multi-algorithm score breakdown">
-                {algoItems.map((item) => (
-                  <span key={item.key} className="algo-chip num" data-active={item.active || undefined}>
-                    <span className="algo-chip-name">{item.label}</span>
-                    <strong>{formatPercent(item.value)}</strong>
-                  </span>
-                ))}
-              </div>
-            )}
+            <div className="algo-strip" aria-label="Algorithm scores">
+              {algoItems.map((item) => (
+                <span key={item.key} className="algo-chip num" data-active={item.active || undefined}>
+                  <span className="algo-chip-name">{item.label}</span>
+                  <strong>{formatPercent(item.value)}</strong>
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
