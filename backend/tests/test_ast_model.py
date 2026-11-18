@@ -97,3 +97,55 @@ def test_null_byte_source_returns_zero(model):
     bad = ["a = 1\x00"]
     good = _src("a = 1")
     assert model.compute(bad, good) == 0.0
+
+
+def test_c_family_structural_extraction_matches_renamed_java_and_cpp():
+    """Renamed C++/Java functions produce identical canonical signatures while
+    unrelated control structures stay distinct."""
+    from src.models.ast_model import extract_c_family_functions
+
+    java_a = """
+    public class MathUtil {
+        // computes sum of positive elements
+        public static int sumPositive(int[] values, int count) {
+            int total = 0;
+            for (int i = 0; i < count; i++) {
+                if (values[i] > 0) {
+                    total += values[i];
+                }
+            }
+            return total;
+        }
+    }
+    """
+    java_b = """
+    public class Calculator {
+        /* completely different comments and names */
+        public static int accumulate(int[] arr, int len) {
+            int acc = 0;
+            for (int idx = 0; idx < len; idx++) {
+                if (arr[idx] > 0) {
+                    acc += arr[idx];
+                }
+            }
+            return acc;
+        }
+    }
+    """
+    java_other = """
+    public class Other {
+        public static void printAll(int[] items, int n) {
+            int k = 0;
+            while (k < n) {
+                k++;
+            }
+        }
+    }
+    """
+    funcs_a = extract_c_family_functions(java_a, "java")
+    funcs_b = extract_c_family_functions(java_b, "java")
+    funcs_other = extract_c_family_functions(java_other, "java")
+    assert len(funcs_a) == 1
+    assert len(funcs_b) == 1
+    assert funcs_a[0][0] == funcs_b[0][0]
+    assert funcs_a[0][0] != funcs_other[0][0]

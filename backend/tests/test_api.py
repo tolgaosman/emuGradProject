@@ -482,3 +482,83 @@ def test_report_pair_pdf_rejects_non_numeric_min_match_words(client):
     resp = client.get(f"/api/report/{scan_id}/pair-pdf/a.txt/b.txt?min_match_words=abc")
     assert resp.status_code == 400
     assert resp.get_json()["code"] == "invalid_min_match_words"
+
+
+def test_exclusions_endpoint_lists_default_terms(client):
+    resp = client.get("/api/exclusions")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["count"] >= 40
+    assert "methodology" in body["terms"]
+
+
+def test_check_sample_presets_text_and_code(client):
+    text_resp = client.post("/api/check-sample", json={"preset": "text", "threshold": 0.5})
+    assert text_resp.status_code == 200
+    text_body = text_resp.get_json()
+    assert text_body["mode"] == "text_similarity"
+    assert len(text_body["files"]) == 4
+
+    code_resp = client.post("/api/check-sample", json={"preset": "code", "threshold": 0.5})
+    assert code_resp.status_code == 200
+    code_body = code_resp.get_json()
+    assert code_body["mode"] == "code_similarity"
+    assert len(code_body["pairs"]) == 1
+    assert code_body["pairs"][0]["score"] > 0.7
+
+    bad_resp = client.post("/api/check-sample", json={"preset": "unknown"})
+    assert bad_resp.status_code == 400
+    assert bad_resp.get_json()["code"] == "invalid_preset"
+
+
+def test_check_custom_exclusions_and_pair_breakdown(client):
+    shared = "cmse405 eastern mediterranean project template header " * 6
+    with_excl = client.post(
+        "/api/check",
+        data={
+            "mode": "text_similarity",
+            "threshold": "0.5",
+            "excluded_terms": "cmse405, eastern, mediterranean, project, template, header",
+            "files": [
+                _upload("a.txt", shared + "unique alpha beta"),
+                _upload("b.txt", shared + "distinct delta omega"),
+            ],
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    assert with_excl["pairs"][0]["score"] == 0.0
+
+    scan_id = _scan_id(
+        client,
+        **{
+            "a.txt": "machine learning pipelines validate datasets carefully before release " * 4,
+            "b.txt": "machine learning pipelines validate datasets carefully before release " * 4,
+        },
+    )
+    pair = client.get(f"/api/report/{scan_id}/pair/a.txt/b.txt").get_json()
+    assert pair["paired_spans"]
+    assert "coverage" in pair["algorithm_scores"]
+    assert "cosine" in pair["algorithm_scores"]
+    assert pair["algorithm_scores"]["ast"] is None
+
+
+def test_check_expands_zip_archive(client):
+    import zipfile
+
+    sample_prose = "quantum computing algorithms optimize linear algebra operations " * 6
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("sub1.txt", sample_prose)
+        zf.writestr("sub2.txt", sample_prose)
+        zf.writestr("__MACOSX/._sub1.txt", "junk")
+    buf.seek(0)
+
+    resp = client.post(
+        "/api/check",
+        data={"mode": "text_similarity", "threshold": "0.5", "files": [(buf, "submissions.zip")]},
+        content_type="multipart/form-data",
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert sorted(body["matrix"]["names"]) == ["sub1.txt", "sub2.txt"]
+    assert body["pairs"][0]["score"] > 0.9

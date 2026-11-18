@@ -6,6 +6,7 @@ import tempfile
 import time
 import unicodedata
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from functools import lru_cache
 from urllib.parse import quote
@@ -20,10 +21,11 @@ from src.engine import ALGORITHMS_BY_MODE, ScanEngine
 from src.language import MODES, detect_language, is_allowed_for_mode, language_for_extension
 from src.loader import MAX_BYTES, MAX_FILES, FileLoader, FileLoadError
 from src.matrix import ComparisonMatrix
-from src.preprocessor import Preprocessor
-from src.reporter import ReportGenerator, matched_spans
+from src.models import ASTModel, CosineModel, JaccardModel, WinnowingModel
+from src.preprocessor import Preprocessor, load_raw_exclusion_terms
+from src.reporter import ReportGenerator, matched_spans, paired_spans
 from src.repository import ScanRepository
-from src.similarity_index import DEFAULT_MIN_MATCH_WORDS, filter_by_word_count
+from src.similarity_index import DEFAULT_MIN_MATCH_WORDS, filter_by_word_count, pair_score
 
 load_dotenv()
 
@@ -34,7 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("plagcheck.api")
 
-API_VERSION = "3.3.0"
+API_VERSION = "4.0.0"
 #: Report UC-03: the threshold is a fraction strictly inside (0, 1).
 MIN_THRESHOLD, MAX_THRESHOLD = 0.01, 0.99
 #: `scan_file.file_name` is VARCHAR(255); longer names would silently push
@@ -42,6 +44,15 @@ MIN_THRESHOLD, MAX_THRESHOLD = 0.01, 0.99
 MAX_NAME_LENGTH = 255
 PASTE_CHAR_LIMIT = 15_000
 MAX_HISTORY = 100
+MAX_CUSTOM_EXCLUSIONS = 200
+_SAMPLES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "samples"))
+_SAMPLE_PRESETS: dict[str, tuple[str, list[str]]] = {
+    "text": (
+        "text_similarity",
+        ["sample_a.txt", "sample_b.txt", "sample_c.docx", "sample_d.pdf"],
+    ),
+    "code": ("code_similarity", ["sample_code_a.py", "sample_code_b.py"]),
+}
 _WORD_RE = re.compile(r"\w+")
 _STARTED_AT = time.monotonic()
 
@@ -83,6 +94,17 @@ reporter = ReportGenerator()
 def _preprocessor() -> Preprocessor:
     """One shared pipeline: building it re-stems the whole stopword list."""
     return Preprocessor()
+
+
+def _preprocessor_for(
+    excluded_terms: tuple[str, ...] = (), use_default_exclusions: bool = True
+) -> Preprocessor:
+    """Return the cached default pipeline, or a custom one when exclusions differ."""
+    if not excluded_terms and use_default_exclusions:
+        return _preprocessor()
+    return Preprocessor(
+        extra_exclusions=excluded_terms, use_default_exclusions=use_default_exclusions
+    )
 
 
 class ApiError(Exception):
@@ -174,12 +196,14 @@ def _display_name(filename: str | None) -> str:
 
 @dataclass(frozen=True)
 class CheckParams:
-    """Validated scan settings from the multipart form."""
+    """Validated scan settings from the multipart form or sample preset."""
 
     mode: str
     algorithm: str
     threshold: float
     min_match_words: int
+    excluded_terms: tuple[str, ...] = ()
+    use_default_exclusions: bool = True
 
 
 @dataclass
@@ -192,12 +216,33 @@ class StagedBatch:
     errors: list[dict] = field(default_factory=list)
 
 
-def _parse_check_params() -> CheckParams:
-    mode = request.form.get("mode", DEFAULT_MODE).lower()
+def _parse_excluded_terms(raw: str | list | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    if isinstance(raw, list):
+        items = [str(x).strip().lower() for x in raw]
+    else:
+        items = [part.strip().lower() for part in re.split(r"[,\n;]+", str(raw))]
+    cleaned = [t for t in items if t][:MAX_CUSTOM_EXCLUSIONS]
+    return tuple(dict.fromkeys(cleaned))
+
+
+def _parse_bool(raw, default: bool = True) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _validate_params(
+    raw_mode, raw_algo, raw_threshold, raw_min_words, raw_excluded=None, raw_use_default=None
+) -> CheckParams:
+    mode = str(raw_mode if raw_mode is not None else DEFAULT_MODE).lower()
     if mode not in MODES:
         raise _reject(f"Invalid mode '{mode}'.", "invalid_mode", choices=sorted(MODES))
 
-    algorithm = request.form.get("algorithm", "auto").lower()
+    algorithm = str(raw_algo if raw_algo is not None else "auto").lower()
     choices = ALGORITHMS_BY_MODE.get(mode, [])
     if algorithm not in choices:
         raise _reject(
@@ -207,7 +252,7 @@ def _parse_check_params() -> CheckParams:
         )
 
     try:
-        threshold = float(request.form.get("threshold", DEFAULT_THRESHOLD))
+        threshold = float(raw_threshold if raw_threshold is not None else DEFAULT_THRESHOLD)
     except (ValueError, TypeError):
         raise _reject("threshold must be a number.", "invalid_threshold") from None
     if not MIN_THRESHOLD <= threshold <= MAX_THRESHOLD:
@@ -216,13 +261,33 @@ def _parse_check_params() -> CheckParams:
         )
 
     try:
-        min_match_words = int(request.form.get("min_match_words", DEFAULT_MIN_MATCH_WORDS))
+        min_match_words = int(
+            raw_min_words if raw_min_words is not None else DEFAULT_MIN_MATCH_WORDS
+        )
     except (ValueError, TypeError):
         raise _reject("min_match_words must be an integer.", "invalid_min_match_words") from None
     if min_match_words < 0:
         raise _reject("min_match_words cannot be negative.", "invalid_min_match_words")
 
-    return CheckParams(mode, algorithm, threshold, min_match_words)
+    return CheckParams(
+        mode=mode,
+        algorithm=algorithm,
+        threshold=threshold,
+        min_match_words=min_match_words,
+        excluded_terms=_parse_excluded_terms(raw_excluded),
+        use_default_exclusions=_parse_bool(raw_use_default, True),
+    )
+
+
+def _parse_check_params() -> CheckParams:
+    return _validate_params(
+        request.form.get("mode", DEFAULT_MODE),
+        request.form.get("algorithm", "auto"),
+        request.form.get("threshold", DEFAULT_THRESHOLD),
+        request.form.get("min_match_words", DEFAULT_MIN_MATCH_WORDS),
+        request.form.get("excluded_terms"),
+        request.form.get("use_default_exclusions"),
+    )
 
 
 def _unique_name(name: str, seen: dict[str, int]) -> str:
@@ -235,16 +300,120 @@ def _unique_name(name: str, seen: dict[str, int]) -> str:
     return f"{stem} ({occurrence + 1}){ext}"
 
 
-def _stage_uploads(uploads, mode: str, scan_uuid: str, sandbox: str) -> StagedBatch:
-    """Save, validate, extract and preprocess every upload inside `sandbox`.
+def _ingest_saved_file(
+    path: str,
+    display_name: str,
+    ext: str,
+    index: int,
+    mode: str,
+    scan_uuid: str,
+    loader: FileLoader,
+    preprocessor: Preprocessor,
+    batch: StagedBatch,
+) -> None:
+    try:
+        raw_text = loader.load(path, mode=mode, display_name=display_name)
+    except (OSError, FileLoadError) as e:
+        message = str(e) if isinstance(e, FileLoadError) else "Could not read upload."
+        batch.errors.append({"file": display_name, "error": message})
+        audit.log(
+            "FILE_REJECTED",
+            scan_uuid=scan_uuid,
+            payload={"file": display_name, "error": message},
+        )
+        return
 
-    Each upload is written under a synthetic ASCII name (`upload_<i><ext>`),
-    since the loader's filename regex only admits `[A-Za-z0-9._-]`; the
-    original — possibly non-ASCII, possibly duplicated — name is kept only
-    as the display name the client matches results on.
-    """
+    language = language_for_extension(ext) or "text"
+    tokens, kgrams = preprocessor.process(raw_text, language=language)
+    size = os.path.getsize(path)
+    batch.file_data[display_name] = {
+        "raw": raw_text,
+        "tokens": tokens,
+        "kgrams": kgrams,
+        "language": language,
+    }
+    batch.files_meta.append({
+        "file_name": display_name,
+        "file_size_bytes": size,
+        "file_format": ext.lstrip("."),
+    })
+    batch.file_infos.append({
+        "name": display_name,
+        "index": index,
+        "language": language,
+        "size_bytes": size,
+        "word_count": len(_WORD_RE.findall(raw_text)),
+    })
+
+
+def _expand_zip_upload(
+    zip_path: str,
+    archive_label: str,
+    base_index: int,
+    mode: str,
+    scan_uuid: str,
+    sandbox: str,
+    seen: dict[str, int],
+    loader: FileLoader,
+    preprocessor: Preprocessor,
+    batch: StagedBatch,
+) -> None:
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            members = [m for m in zf.infolist() if not m.is_dir()]
+            extracted_any = False
+            for m_idx, info in enumerate(members):
+                parts = info.filename.replace("\\", "/").split("/")
+                if any(part.startswith(".") or part == "__MACOSX" for part in parts):
+                    continue
+                member_name = _display_name(info.filename)
+                if not member_name:
+                    continue
+                m_ext = os.path.splitext(member_name)[1].lower()
+                if not is_allowed_for_mode(m_ext, mode):
+                    continue
+                if len(batch.file_data) >= MAX_FILES:
+                    batch.errors.append({
+                        "file": member_name,
+                        "error": f"Skipped: batch limit of {MAX_FILES} files reached.",
+                    })
+                    continue
+                if info.file_size == 0 or info.file_size > MAX_BYTES:
+                    batch.errors.append({
+                        "file": member_name,
+                        "error": "Empty or exceeds 10 MB limit inside archive.",
+                    })
+                    continue
+                extracted_any = True
+                display_name = _unique_name(member_name, seen)
+                dest = os.path.join(sandbox, f"upload_{base_index}_{m_idx}{m_ext}")
+                with zf.open(info) as src_f, open(dest, "wb") as dst_f:
+                    dst_f.write(src_f.read(MAX_BYTES + 1))
+                _ingest_saved_file(
+                    dest,
+                    display_name,
+                    m_ext,
+                    base_index + m_idx,
+                    mode,
+                    scan_uuid,
+                    loader,
+                    preprocessor,
+                    batch,
+                )
+            if not extracted_any:
+                batch.errors.append({
+                    "file": archive_label,
+                    "error": f"No valid files for mode '{mode}' found inside archive.",
+                })
+    except (zipfile.BadZipFile, OSError):
+        batch.errors.append({"file": archive_label, "error": "Corrupt or unreadable .zip archive."})
+
+
+def _stage_uploads(
+    uploads, mode: str, scan_uuid: str, sandbox: str, preprocessor: Preprocessor
+) -> StagedBatch:
+    """Save, validate, extract and preprocess every upload inside `sandbox`."""
     loader = FileLoader()
-    preprocessor = _preprocessor()
     batch = StagedBatch()
     seen: dict[str, int] = {}
 
@@ -255,6 +424,27 @@ def _stage_uploads(uploads, mode: str, scan_uuid: str, sandbox: str) -> StagedBa
             continue
 
         ext = os.path.splitext(original)[1].lower()
+        if ext == ".zip":
+            zip_path = os.path.join(sandbox, f"archive_{index}.zip")
+            try:
+                upload.save(zip_path)
+            except OSError:
+                batch.errors.append({"file": original, "error": "Could not read upload."})
+                continue
+            _expand_zip_upload(
+                zip_path,
+                original,
+                index,
+                mode,
+                scan_uuid,
+                sandbox,
+                seen,
+                loader,
+                preprocessor,
+                batch,
+            )
+            continue
+
         if not is_allowed_for_mode(ext, mode):
             batch.errors.append({
                 "file": original,
@@ -262,45 +452,23 @@ def _stage_uploads(uploads, mode: str, scan_uuid: str, sandbox: str) -> StagedBa
             })
             continue
 
-        # Two uploads may share a name (e.g. the same file in both the
-        # reference and candidate slots); without this they would collide
-        # in file_data and the matrix.
+        if len(batch.file_data) >= MAX_FILES:
+            batch.errors.append({
+                "file": original,
+                "error": f"Batch limit of {MAX_FILES} files reached.",
+            })
+            continue
+
         display_name = _unique_name(original, seen)
         path = os.path.join(sandbox, f"upload_{index}{ext}")
         try:
             upload.save(path)
-            raw_text = loader.load(path, mode=mode, display_name=display_name)
-        except (OSError, FileLoadError) as e:
-            message = str(e) if isinstance(e, FileLoadError) else "Could not read upload."
-            batch.errors.append({"file": display_name, "error": message})
-            audit.log(
-                "FILE_REJECTED",
-                scan_uuid=scan_uuid,
-                payload={"file": display_name, "error": message},
-            )
+        except OSError:
+            batch.errors.append({"file": display_name, "error": "Could not read upload."})
             continue
-
-        language = language_for_extension(ext) or "text"
-        tokens, kgrams = preprocessor.process(raw_text, language=language)
-        size = os.path.getsize(path)
-        batch.file_data[display_name] = {
-            "raw": raw_text,
-            "tokens": tokens,
-            "kgrams": kgrams,
-            "language": language,
-        }
-        batch.files_meta.append({
-            "file_name": display_name,
-            "file_size_bytes": size,
-            "file_format": ext.lstrip("."),
-        })
-        batch.file_infos.append({
-            "name": display_name,
-            "index": index,
-            "language": language,
-            "size_bytes": size,
-            "word_count": len(_WORD_RE.findall(raw_text)),
-        })
+        _ingest_saved_file(
+            path, display_name, ext, index, mode, scan_uuid, loader, preprocessor, batch
+        )
     return batch
 
 
@@ -314,42 +482,13 @@ def _summary(pairs: list[dict]) -> dict:
     }
 
 
-@app.route("/api/check", methods=["POST"])
-def api_check():
-    """Run a scan over uploaded files (multipart/form-data).
-
-    Files are validated and staged in a temporary sandbox directory that is
-    always deleted afterward — the API never accepts server-side file paths,
-    since a browser can't send them and doing so would be a file-read
-    vulnerability.
-    """
-    uploads = request.files.getlist("files")
-    params = _parse_check_params()
-    if not uploads:
-        raise _reject("Please upload at least 1 file.", "no_files")
-    if len(uploads) > MAX_FILES:
-        raise _reject(
-            f"Batch of {len(uploads)} exceeds max of {MAX_FILES} files.", "too_many_files"
-        )
-
-    scan_uuid = str(uuid.uuid4())
-    started = time.perf_counter()
-    audit.log(
-        "SCAN_START",
-        scan_uuid=scan_uuid,
-        payload={
-            "files": [_display_name(u.filename) for u in uploads],
-            "mode": params.mode,
-            "algorithm": params.algorithm,
-            "threshold": params.threshold,
-        },
-    )
-
-    with tempfile.TemporaryDirectory(prefix="plagcheck_") as sandbox:
-        batch = _stage_uploads(uploads, params.mode, scan_uuid, sandbox)
-
-    # A single valid file is still a valid scan: it just has nothing to be
-    # compared against, so its matrix/pairs come back empty.
+def _execute_scan(
+    batch: StagedBatch,
+    params: CheckParams,
+    scan_uuid: str,
+    started: float,
+    preprocessor: Preprocessor,
+):
     if not batch.file_data:
         raise _reject(
             f"Need at least 1 valid file for mode '{params.mode}'.",
@@ -361,7 +500,7 @@ def api_check():
     try:
         engine = ScanEngine(mode=params.mode, algorithm=params.algorithm)
         result = engine.compute(
-            batch.file_data, preprocessor=_preprocessor(), min_match_words=params.min_match_words
+            batch.file_data, preprocessor=preprocessor, min_match_words=params.min_match_words
         )
         pairs = result.pairs(params.threshold)
         repository.save_scan(
@@ -376,6 +515,9 @@ def api_check():
             scan_uuid,
             {n: {"raw": d["raw"], "language": d["language"]} for n, d in batch.file_data.items()},
             params.min_match_words,
+            source_breakdowns=result.source_breakdowns,
+            excluded_terms=list(params.excluded_terms),
+            use_default_exclusions=params.use_default_exclusions,
         )
     except Exception:
         logger.exception("Scan %s failed", scan_uuid)
@@ -417,6 +559,86 @@ def api_check():
     })
 
 
+@app.route("/api/check", methods=["POST"])
+def api_check():
+    """Run a scan over uploaded files (multipart/form-data)."""
+    uploads = request.files.getlist("files")
+    params = _parse_check_params()
+    if not uploads:
+        raise _reject("Please upload at least 1 file.", "no_files")
+    if len(uploads) > MAX_FILES:
+        raise _reject(
+            f"Batch of {len(uploads)} exceeds max of {MAX_FILES} files.", "too_many_files"
+        )
+
+    scan_uuid = str(uuid.uuid4())
+    started = time.perf_counter()
+    audit.log(
+        "SCAN_START",
+        scan_uuid=scan_uuid,
+        payload={
+            "files": [_display_name(u.filename) for u in uploads],
+            "mode": params.mode,
+            "algorithm": params.algorithm,
+            "threshold": params.threshold,
+        },
+    )
+
+    preprocessor = _preprocessor_for(params.excluded_terms, params.use_default_exclusions)
+    with tempfile.TemporaryDirectory(prefix="plagcheck_") as sandbox:
+        batch = _stage_uploads(uploads, params.mode, scan_uuid, sandbox, preprocessor)
+
+    return _execute_scan(batch, params, scan_uuid, started, preprocessor)
+
+
+@app.route("/api/check-sample", methods=["POST"])
+def api_check_sample():
+    """Run a scan over built-in sample fixtures (`text` or `code`) for 1-click demos."""
+    body = request.get_json(silent=True) or {}
+    preset = str(body.get("preset", "text")).lower()
+    if preset not in _SAMPLE_PRESETS:
+        raise _reject(
+            f"Invalid sample preset '{preset}'.",
+            "invalid_preset",
+            choices=sorted(_SAMPLE_PRESETS),
+        )
+    preset_mode, filenames = _SAMPLE_PRESETS[preset]
+    params = _validate_params(
+        preset_mode,
+        body.get("algorithm", "auto"),
+        body.get("threshold", DEFAULT_THRESHOLD),
+        body.get("min_match_words", DEFAULT_MIN_MATCH_WORDS),
+        body.get("excluded_terms"),
+        body.get("use_default_exclusions"),
+    )
+
+    scan_uuid = str(uuid.uuid4())
+    started = time.perf_counter()
+    audit.log(
+        "SCAN_START",
+        scan_uuid=scan_uuid,
+        payload={
+            "files": filenames,
+            "mode": params.mode,
+            "algorithm": params.algorithm,
+            "threshold": params.threshold,
+            "sample_preset": preset,
+        },
+    )
+
+    loader = FileLoader()
+    preprocessor = _preprocessor_for(params.excluded_terms, params.use_default_exclusions)
+    batch = StagedBatch()
+    for index, fname in enumerate(filenames):
+        sample_path = os.path.join(_SAMPLES_DIR, fname)
+        ext = os.path.splitext(fname)[1].lower()
+        _ingest_saved_file(
+            sample_path, fname, ext, index, params.mode, scan_uuid, loader, preprocessor, batch
+        )
+
+    return _execute_scan(batch, params, scan_uuid, started, preprocessor)
+
+
 # -- Metadata endpoints ----------------------------------------------------------
 
 
@@ -437,6 +659,13 @@ def api_status():
 def api_modes():
     """List the available scanning modes."""
     return jsonify({"modes": sorted(MODES)})
+
+
+@app.route("/api/exclusions", methods=["GET"])
+def api_exclusions():
+    """Return the built-in 50-term academic exclusion list (FR-15 / UC-12)."""
+    terms = load_raw_exclusion_terms()
+    return jsonify({"terms": terms, "count": len(terms)})
 
 
 @app.route("/api/algorithms", methods=["GET"])
@@ -542,56 +771,96 @@ def api_report_delete(scan_uuid):
 
 
 def _pair_payload(scan_uuid: str, file_a: str, file_b: str):
-    """Resolve one pair's raw texts and filtered matched spans.
+    """Resolve one pair's raw texts, filtered matched spans, and preprocessor.
 
-    Returns `(texts, spans_a, spans_b, min_match_words)`. Shared by the JSON
-    inspector endpoint and the PDF export so the two can never highlight
-    different things.
+    Returns `(texts, spans_a, spans_b, min_match_words, preprocessor)`. Shared
+    by the JSON inspector endpoint and the PDF export so the two can never
+    highlight different things.
     """
-    loaded = repository.load_texts(scan_uuid)
-    if loaded is None:
+    sidecar = repository.load_sidecar(scan_uuid)
+    if sidecar is None:
         raise ApiError("Pair not found.", "not_found", 404)
-    texts, stored_min_match_words = loaded
+    texts = sidecar.get("files", {})
+    stored_min_match_words = int(sidecar.get("min_match_words", 0))
     if file_a not in texts or file_b not in texts:
         raise ApiError("Pair not found.", "not_found", 404)
 
-    # Defaults to whatever the scan itself used, so the highlighting matches
-    # the score the user is looking at; overridable for exploration.
     try:
         min_match_words = int(request.args.get("min_match_words", stored_min_match_words))
     except (TypeError, ValueError):
         raise ApiError("min_match_words must be an integer.", "invalid_min_match_words") from None
 
+    preprocessor = _preprocessor_for(
+        tuple(sidecar.get("excluded_terms") or ()),
+        bool(sidecar.get("use_default_exclusions", True)),
+    )
     spans_a, spans_b = matched_spans(
         texts[file_a]["raw"],
         texts[file_b]["raw"],
         texts[file_a]["language"],
         texts[file_b]["language"],
-        _preprocessor(),
+        preprocessor,
     )
     return (
         texts,
         filter_by_word_count(texts[file_a]["raw"], spans_a, min_match_words),
         filter_by_word_count(texts[file_b]["raw"], spans_b, min_match_words),
         min_match_words,
+        preprocessor,
     )
 
 
-def _matched_kgrams(texts: dict, file_a: str, file_b: str) -> int:
-    preprocessor = _preprocessor()
-    _, kgrams_a = preprocessor.process(texts[file_a]["raw"], texts[file_a]["language"])
-    _, kgrams_b = preprocessor.process(texts[file_b]["raw"], texts[file_b]["language"])
-    return len(set(kgrams_a) & set(kgrams_b))
+def _pair_stats(
+    texts: dict,
+    file_a: str,
+    file_b: str,
+    spans_a: list[tuple[int, int]],
+    spans_b: list[tuple[int, int]],
+    preprocessor: Preprocessor,
+) -> tuple[int, dict]:
+    raw_a, lang_a = texts[file_a]["raw"], texts[file_a]["language"]
+    raw_b, lang_b = texts[file_b]["raw"], texts[file_b]["language"]
+    tokens_a, kgrams_a = preprocessor.process(raw_a, lang_a)
+    tokens_b, kgrams_b = preprocessor.process(raw_b, lang_b)
+    matched_kg = len(set(kgrams_a) & set(kgrams_b))
+    ast_score = (
+        round(ASTModel().compute([raw_a], [raw_b]), 4)
+        if lang_a == "python" and lang_b == "python"
+        else None
+    )
+    algo_scores = {
+        "coverage": round(pair_score(raw_a, raw_b, spans_a, spans_b), 4),
+        "cosine": round(CosineModel().compute(tokens_a, tokens_b), 4),
+        "winnowing": round(WinnowingModel().compute(tokens_a, tokens_b), 4),
+        "jaccard": round(JaccardModel().compute(tokens_a, tokens_b), 4),
+        "ast": ast_score,
+    }
+    return matched_kg, algo_scores
 
 
 @app.route("/api/report/<uuid:scan_uuid>/pair/<file_a>/<file_b>", methods=["GET"])
 def api_report_pair(scan_uuid, file_a, file_b):
-    """Return both files' raw text plus matched-span offsets for the inspector."""
-    texts, spans_a, spans_b, min_match_words = _pair_payload(str(scan_uuid), file_a, file_b)
+    """Return both files' raw text, spans, linked match blocks, and 4-algo breakdown."""
+    texts, spans_a, spans_b, min_match_words, preprocessor = _pair_payload(
+        str(scan_uuid), file_a, file_b
+    )
+    matched_kg, algo_scores = _pair_stats(
+        texts, file_a, file_b, spans_a, spans_b, preprocessor
+    )
+    linked = paired_spans(
+        texts[file_a]["raw"],
+        texts[file_b]["raw"],
+        texts[file_a]["language"],
+        texts[file_b]["language"],
+        preprocessor,
+        min_match_words=min_match_words,
+    )
     return jsonify({
         "file_a": {"name": file_a, "text": texts[file_a]["raw"], "matched_spans": spans_a},
         "file_b": {"name": file_b, "text": texts[file_b]["raw"], "matched_spans": spans_b},
-        "matched_kgrams": _matched_kgrams(texts, file_a, file_b),
+        "paired_spans": linked,
+        "algorithm_scores": algo_scores,
+        "matched_kgrams": matched_kg,
         "min_match_words": min_match_words,
     })
 
@@ -609,7 +878,7 @@ def api_report_pair_pdf(scan_uuid, file_a, file_b):
     score the scan never produced.
     """
     scan_uuid = str(scan_uuid)
-    texts, spans_a, spans_b, _ = _pair_payload(scan_uuid, file_a, file_b)
+    texts, spans_a, spans_b, _, _ = _pair_payload(scan_uuid, file_a, file_b)
 
     record = repository.get_scan(scan_uuid) or {}
     score = next(

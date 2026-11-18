@@ -1,12 +1,12 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent } from 'react'
-import { getAlgorithms } from '../api/client'
+import { getAlgorithms, getExclusions } from '../api/client'
 import type { Algorithm, Mode } from '../api/types'
 import { ALGORITHM_HINT, ALGORITHM_LABEL, formatPercent } from '../lib/format'
 import { EASE_OUT } from '../lib/motion'
 import { DEFAULT_MIN_MATCH_WORDS } from './DropZone/rules'
-import { ChevronIcon } from './icons'
+import { ChevronIcon, CloseIcon } from './icons'
 
 const FALLBACK_CHOICES: Record<Mode, Algorithm[]> = {
   text_similarity: ['auto', 'cosine', 'winnowing', 'jaccard'],
@@ -22,6 +22,10 @@ interface ScanSettingsProps {
   onThresholdChange: (threshold: number) => void
   minMatchWords: number
   onMinMatchWordsChange: (words: number) => void
+  excludedTerms: string[]
+  onExcludedTermsChange: (terms: string[]) => void
+  useDefaultExclusions: boolean
+  onUseDefaultExclusionsChange: (enabled: boolean) => void
   disabled?: boolean
 }
 
@@ -33,30 +37,62 @@ export function ScanSettings({
   onThresholdChange,
   minMatchWords,
   onMinMatchWordsChange,
+  excludedTerms,
+  onExcludedTermsChange,
+  useDefaultExclusions,
+  onUseDefaultExclusionsChange,
   disabled,
 }: ScanSettingsProps) {
-  const [choices, setChoices] = useState<Algorithm[]>(FALLBACK_CHOICES[mode])
-  // Non-default settings (e.g. adopted from a reopened scan) open the section
-  // unless the user has toggled it themselves.
+  const [byMode, setByMode] = useState<Partial<Record<Mode, Algorithm[]>>>({})
+  const [defaultTerms, setDefaultTerms] = useState<string[] | null>(null)
+  const [showDefaultTerms, setShowDefaultTerms] = useState(false)
+  const [termDraft, setTermDraft] = useState('')
   const [advancedToggle, setAdvancedToggle] = useState<boolean | null>(null)
-  const advancedOpen = advancedToggle ?? (algorithm !== 'auto' || minMatchWords !== DEFAULT_MIN_MATCH_WORDS)
+
+  const choices = byMode[mode] ?? FALLBACK_CHOICES[mode]
+  const hasCustomExclusions = excludedTerms.length > 0 || !useDefaultExclusions
+  const advancedOpen =
+    advancedToggle ?? (algorithm !== 'auto' || minMatchWords !== DEFAULT_MIN_MATCH_WORDS || hasCustomExclusions)
+
   const chipRefs = useRef<(HTMLButtonElement | null)[]>([])
   const uid = useId()
 
   useEffect(() => {
     let cancelled = false
-    setChoices(FALLBACK_CHOICES[mode])
     getAlgorithms()
       .then((res) => {
-        if (!cancelled && res.by_mode[mode]) setChoices(res.by_mode[mode])
+        if (!cancelled) setByMode(res.by_mode)
       })
-      .catch(() => {
-        // The fallback list already matches the server's.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [mode])
+  }, [])
+
+  const toggleDefaultListPreview = () => {
+    const next = !showDefaultTerms
+    setShowDefaultTerms(next)
+    if (next && defaultTerms === null) {
+      getExclusions()
+        .then((res) => setDefaultTerms(res.terms))
+        .catch(() => setDefaultTerms([]))
+    }
+  }
+
+  const commitDraftTerms = (raw: string) => {
+    const incoming = raw
+      .split(/[,\n;]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+    if (incoming.length === 0) return
+    const merged = Array.from(new Set([...excludedTerms, ...incoming])).slice(0, 100)
+    onExcludedTermsChange(merged)
+    setTermDraft('')
+  }
+
+  const removeCustomTerm = (term: string) => {
+    onExcludedTermsChange(excludedTerms.filter((t) => t !== term))
+  }
 
   const handleChipKeys = (e: KeyboardEvent) => {
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]
@@ -116,9 +152,10 @@ export function ScanSettings({
         aria-controls={`${uid}-advanced`}
         onClick={() => setAdvancedToggle(!advancedOpen)}
       >
-        <span>Advanced</span>
+        <span>Advanced & exclusions</span>
         <span className="disclosure-summary">
-          {ALGORITHM_LABEL[algorithm]} · {minMatchWords}-word minimum
+          {ALGORITHM_LABEL[algorithm]} · {minMatchWords}w min
+          {excludedTerms.length > 0 ? ` · +${excludedTerms.length} excl` : ''}
         </span>
         <motion.span animate={{ rotate: advancedOpen ? 180 : 0 }} transition={{ duration: 0.2, ease: EASE_OUT }}>
           <ChevronIcon size={14} />
@@ -138,7 +175,7 @@ export function ScanSettings({
             <div className="advanced-inner">
               <div className="field">
                 <span className="field-label" id={`${uid}-algorithm`}>
-                  Scoring
+                  Scoring engine
                 </span>
                 <div className="chips" role="radiogroup" aria-labelledby={`${uid}-algorithm`} onKeyDown={handleChipKeys}>
                   {choices.map((choice, i) => (
@@ -185,8 +222,82 @@ export function ScanSettings({
                   style={{ '--fill': `${((minMatchWords - 1) / 24) * 100}%` } as CSSProperties}
                   onChange={(e) => onMinMatchWordsChange(Number(e.target.value))}
                 />
-                <p className="field-hint">Short common phrases stop counting as evidence.</p>
+                <p className="field-hint">Filters out short incidental phrases from scoring and highlights.</p>
               </div>
+
+              {mode === 'text_similarity' && (
+                <div className="field exclusion-box">
+                  <div className="field-row">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={useDefaultExclusions}
+                        disabled={disabled}
+                        onChange={(e) => onUseDefaultExclusionsChange(e.target.checked)}
+                      />
+                      <span className="field-label">Academic boilerplate filter</span>
+                    </label>
+                    <button type="button" className="btn btn-link" onClick={toggleDefaultListPreview}>
+                      {showDefaultTerms ? 'Hide terms' : 'View 50 terms'}
+                    </button>
+                  </div>
+                  {showDefaultTerms && (
+                    <div className="term-cloud" aria-label="Default academic exclusions">
+                      {defaultTerms === null ? (
+                        <span className="field-hint">Loading terms…</span>
+                      ) : (
+                        defaultTerms.map((term) => (
+                          <span key={term} className="term-pill">
+                            {term}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  <label htmlFor={`${uid}-excl`} className="field-label exclusion-sub">
+                    Custom excluded terms
+                  </label>
+                  <div className="exclusion-input-row">
+                    <input
+                      id={`${uid}-excl`}
+                      type="text"
+                      className="text-input"
+                      placeholder="e.g. cmse405, eastern mediterranean"
+                      value={termDraft}
+                      disabled={disabled}
+                      onChange={(e) => setTermDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ',') {
+                          e.preventDefault()
+                          commitDraftTerms(termDraft)
+                        }
+                      }}
+                      onBlur={() => {
+                        if (termDraft.trim()) commitDraftTerms(termDraft)
+                      }}
+                    />
+                  </div>
+                  {excludedTerms.length > 0 && (
+                    <div className="term-cloud">
+                      {excludedTerms.map((term) => (
+                        <span key={term} className="term-pill term-pill-custom">
+                          {term}
+                          <button
+                            type="button"
+                            className="term-pill-remove"
+                            aria-label={`Remove excluded term ${term}`}
+                            disabled={disabled}
+                            onClick={() => removeCustomTerm(term)}
+                          >
+                            <CloseIcon size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </motion.div>
         )}

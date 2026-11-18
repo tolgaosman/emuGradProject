@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react'
-import type { Mode } from '../../api/types'
+import type { Algorithm, Mode, SamplePreset } from '../../api/types'
 import type { ScanState } from '../../hooks/useScan'
-import type { ResultRow, ResultsModel, Workspace } from '../../lib/deriveResults'
+import type { ResultRow, ResultsModel } from '../../lib/deriveResults'
 import { panelMotion } from '../../lib/motion'
 import { ErrorState } from './ErrorState'
 import type { ExportKind } from './ExportMenu'
@@ -13,11 +13,16 @@ interface ResultsCanvasProps {
   state: ScanState
   model: ResultsModel | null
   mode: Mode
-  workspace: Workspace
+  algorithm: Algorithm
   threshold: number
+  minMatchWords: number
+  useDefaultExclusions: boolean
+  excludedCount: number
   settingsChanged: boolean
   selectedId: string | null
   exportBusy: ExportKind | null
+  onThresholdChange: (next: number) => void
+  onRunSample: (preset: SamplePreset) => void
   onOpenPair: (row: ResultRow) => void
   onDownloadPdf: (row: ResultRow) => void
   onExport: (kind: ExportKind) => void
@@ -30,11 +35,16 @@ export function ResultsCanvas({
   state,
   model,
   mode,
-  workspace,
+  algorithm,
   threshold,
+  minMatchWords,
+  useDefaultExclusions,
+  excludedCount,
   settingsChanged,
   selectedId,
   exportBusy,
+  onThresholdChange,
+  onRunSample,
   onOpenPair,
   onDownloadPdf,
   onExport,
@@ -46,7 +56,17 @@ export function ResultsCanvas({
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div key={key} {...panelMotion}>
-        {state.status === 'idle' && <IdleState mode={mode} workspace={workspace} />}
+        {state.status === 'idle' && (
+          <IdleState
+            mode={mode}
+            threshold={threshold}
+            algorithm={algorithm}
+            minMatchWords={minMatchWords}
+            useDefaultExclusions={useDefaultExclusions}
+            excludedCount={excludedCount}
+            onRunSample={onRunSample}
+          />
+        )}
 
         {(state.status === 'uploading' || state.status === 'processing' || state.status === 'loading') && (
           <ProgressState phase={state.status} />
@@ -67,10 +87,11 @@ export function ResultsCanvas({
             result={state.result}
             model={model}
             threshold={threshold}
-            fromHistory={state.meta.source === 'history'}
+            source={state.meta.source}
             settingsChanged={settingsChanged}
             selectedId={selectedId}
             exportBusy={exportBusy}
+            onThresholdChange={onThresholdChange}
             onOpenPair={onOpenPair}
             onDownloadPdf={onDownloadPdf}
             onExport={onExport}

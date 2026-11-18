@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import tokenize as py_tokenize
+from collections.abc import Iterable
 from tokenize import TokenError
 
 import nltk
@@ -53,6 +54,25 @@ def _english_stopwords() -> set[str]:
         return set()
 
 
+def load_raw_exclusion_terms(exclusions_path: str | None = None) -> list[str]:
+    """Return the un-stemmed terms from the configured academic exclusion list."""
+    path = (
+        exclusions_path
+        or os.environ.get("EXCLUSIONS_PATH")
+        or os.environ.get("EXCLUSION_LIST_PATH")
+        or _DEFAULT_EXCLUSIONS
+    )
+    if not os.path.isfile(path):
+        return []
+    out: list[str] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            term = line.strip().lower()
+            if term and not term.startswith("#"):
+                out.append(term)
+    return out
+
+
 class Preprocessor:
     """The 6-step NLP pipeline.
 
@@ -60,14 +80,26 @@ class Preprocessor:
     stem, and generate k-grams.
     """
 
-    def __init__(self, k: int = 5, exclusions_path: str | None = None):
+    def __init__(
+        self,
+        k: int = 5,
+        exclusions_path: str | None = None,
+        extra_exclusions: Iterable[str] | None = None,
+        use_default_exclusions: bool = True,
+    ):
         """Build the stemmed stopword set and the stemmed exclusion set."""
         self.k = k
         self.stemmer = PorterStemmer()
         # Tokens are stemmed before they are compared against these sets, so
         # the sets must be stemmed too for the comparison to match.
         self.stop_words = {self.stemmer.stem(w) for w in _english_stopwords()}
-        self.exclusions = self._load_exclusions(exclusions_path)
+        self.exclusions: set[str] = (
+            self._load_exclusions(exclusions_path) if use_default_exclusions else set()
+        )
+        if extra_exclusions:
+            for raw_term in extra_exclusions:
+                for token in re.findall(r"\w+", raw_term.lower()):
+                    self.exclusions.add(self.stemmer.stem(token))
 
     def is_filtered(self, stemmed: str, language: str = "text") -> bool:
         """Whether a stemmed token is dropped from similarity computation.

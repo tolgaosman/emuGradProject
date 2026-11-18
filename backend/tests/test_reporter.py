@@ -213,3 +213,49 @@ def test_highlight_segments_round_trips_the_original_text():
 def test_highlight_still_emits_mark_tags_after_the_segment_refactor():
     assert _highlight("alpha beta", [(0, 5)]) == "<mark>alpha</mark> beta"
     assert _highlight("a < b", []) == "a &lt; b"
+
+
+def test_paired_spans_links_prose_and_c_family_renamed_code():
+    """paired_spans returns synchronized (span_a, span_b) blocks for both
+    literal prose overlaps and renamed C/C++/Java structural functions."""
+    from src.reporter import paired_spans
+
+    pre = Preprocessor(exclusions_path="__no_such_file__")
+    prose_a = (
+        "Intro note. Machine learning models require careful validation "
+        "before deployment in production systems."
+    )
+    prose_b = (
+        "Header line.\n\nMachine learning models require careful validation "
+        "before deployment in production systems!"
+    )
+    linked = paired_spans(prose_a, prose_b, "text", "text", pre, min_match_words=5)
+    assert len(linked) == 1
+    assert linked[0]["kind"] == "literal"
+    sa, ea = linked[0]["span_a"]
+    sb, eb = linked[0]["span_b"]
+    assert "Machine learning" in prose_a[sa:ea]
+    assert "Machine learning" in prose_b[sb:eb]
+
+    cpp_a = (
+        "int computeSum(int* arr, int count) {\n"
+        "    int total = 0;\n"
+        "    for (int i = 0; i < count; i++) {\n"
+        "        if (arr[i] > 0) { total += arr[i]; }\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+    )
+    cpp_b = (
+        "int addPositive(int* items, int length) {\n"
+        "    int acc = 0;\n"
+        "    for (int k = 0; k < length; k++) {\n"
+        "        if (items[k] > 0) { acc += items[k]; }\n"
+        "    }\n"
+        "    return acc;\n"
+        "}\n"
+    )
+    spans_a, spans_b = matched_spans(cpp_a, cpp_b, "cpp", "cpp", pre)
+    assert spans_a and spans_b
+    struct_linked = paired_spans(cpp_a, cpp_b, "cpp", "cpp", pre, min_match_words=5)
+    assert any(item["kind"] == "structural" for item in struct_linked)

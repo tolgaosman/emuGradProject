@@ -5,9 +5,11 @@ import type {
   ApiErrorBody,
   CheckResponse,
   DetectLanguageResponse,
+  ExclusionsResponse,
   Mode,
   PairResponse,
   ReportResponse,
+  SamplePreset,
   ScanHistoryEntry,
   StatusResponse,
 } from './types'
@@ -58,6 +60,8 @@ const pairPath = (kind: 'pair' | 'pair-pdf', scanId: string, fileA: string, file
   `${reportPath(scanId)}/${kind}/${encodeURIComponent(fileA)}/${encodeURIComponent(fileB)}`
 
 export const getAlgorithms = () => request<AlgorithmsResponse>('/api/algorithms')
+
+export const getExclusions = () => request<ExclusionsResponse>('/api/exclusions')
 
 export const getStatus = () => request<StatusResponse>('/api/status')
 
@@ -152,8 +156,33 @@ export interface CheckOptions {
   threshold: number
   algorithm?: Algorithm
   minMatchWords?: number
+  excludedTerms?: readonly string[]
+  useDefaultExclusions?: boolean
   onProgress?: (fraction: number) => void
 }
+
+export interface SampleCheckOptions {
+  preset: SamplePreset
+  threshold: number
+  algorithm?: Algorithm
+  minMatchWords?: number
+  excludedTerms?: readonly string[]
+  useDefaultExclusions?: boolean
+}
+
+export const runSampleCheck = (opts: SampleCheckOptions) =>
+  request<CheckResponse>('/api/check-sample', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      preset: opts.preset,
+      threshold: opts.threshold,
+      algorithm: opts.algorithm,
+      min_match_words: opts.minMatchWords,
+      excluded_terms: opts.excludedTerms,
+      use_default_exclusions: opts.useDefaultExclusions,
+    }),
+  })
 
 /** A scan in flight. `abort()` cancels the upload so a superseded or reset
  * scan stops consuming bandwidth and server time instead of merely having
@@ -175,13 +204,28 @@ export class AbortedError extends Error {
 /** Upload files and run a scan. Uses XHR (not fetch) so upload progress can
  * be reported to the caller for the progress bar. */
 export function runCheck(opts: CheckOptions): RunningCheck {
-  const { files, mode, threshold, algorithm, minMatchWords, onProgress } = opts
+  const {
+    files,
+    mode,
+    threshold,
+    algorithm,
+    minMatchWords,
+    excludedTerms,
+    useDefaultExclusions,
+    onProgress,
+  } = opts
 
   const form = new FormData()
   form.append('mode', mode)
   form.append('threshold', String(threshold))
   if (algorithm !== undefined) form.append('algorithm', algorithm)
   if (minMatchWords !== undefined) form.append('min_match_words', String(minMatchWords))
+  if (excludedTerms && excludedTerms.length > 0) {
+    form.append('excluded_terms', excludedTerms.join(','))
+  }
+  if (useDefaultExclusions !== undefined) {
+    form.append('use_default_exclusions', String(useDefaultExclusions))
+  }
   for (const file of files) form.append('files', file, file.name)
 
   const xhr = new XMLHttpRequest()

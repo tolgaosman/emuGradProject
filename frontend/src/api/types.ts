@@ -139,12 +139,36 @@ export interface PairSide {
   matched_spans: [number, number][]
 }
 
+export interface PairedSpan {
+  id: number
+  span_a: [number, number]
+  span_b: [number, number]
+  kind: 'literal' | 'structural'
+}
+
+export interface AlgorithmScores {
+  coverage: number
+  cosine: number
+  winnowing: number
+  jaccard: number
+  ast: number | null
+}
+
 export interface PairResponse {
   file_a: PairSide
   file_b: PairSide
+  paired_spans?: PairedSpan[]
+  algorithm_scores?: AlgorithmScores
   matched_kgrams?: number
   min_match_words?: number
 }
+
+export interface ExclusionsResponse {
+  terms: string[]
+  count: number
+}
+
+export type SamplePreset = 'text' | 'code'
 
 export interface DetectLanguageResponse {
   language: Language

@@ -570,6 +570,18 @@
   font-size: var(--text-xs);
 }
 
+.zone-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.zone-foot-meta {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
 .zone-clear {
   align-self: flex-end;
   font-size: var(--text-xs);
@@ -883,6 +895,98 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   opacity: 0.65;
+}
+
+/* ---------- Exclusions (FR-15) ---------- */
+
+.exclusion-box {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.checkbox-row input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.exclusion-sub {
+  margin-top: var(--space-1);
+}
+
+.exclusion-input-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.text-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.text-input::placeholder {
+  color: var(--text-3);
+}
+
+.term-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 112px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.term-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.term-pill-custom {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.term-pill-remove {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.term-pill-remove:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 /* ---------- Run bar ---------- */

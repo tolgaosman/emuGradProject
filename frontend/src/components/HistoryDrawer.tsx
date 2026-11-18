@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { deleteScan, listScans } from '../api/client'
 import type { ScanHistoryEntry } from '../api/types'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -9,10 +9,9 @@ import { EASE_OUT, spring } from '../lib/motion'
 import { CloseIcon, HistoryIcon, RefreshIcon, TrashIcon } from './icons'
 import { RiskPill } from './results/RiskPill'
 
-type Load =
-  | { state: 'loading' }
-  | { state: 'ready'; scans: ScanHistoryEntry[] }
-  | { state: 'error'; message: string }
+type Resolved =
+  | { attempt: number; state: 'ready'; scans: ScanHistoryEntry[] }
+  | { attempt: number; state: 'error'; message: string }
 
 interface HistoryDrawerProps {
   currentScanId: string | null
@@ -27,30 +26,42 @@ function describeFiles(names: string[]): string {
 }
 
 export function HistoryDrawer({ currentScanId, onOpenScan, onDeleted, onClose }: HistoryDrawerProps) {
-  const [load, setLoad] = useState<Load>({ state: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+  const [resolved, setResolved] = useState<Resolved | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
   useFocusTrap(panelRef, true, onClose)
 
-  const refresh = useCallback(() => {
-    setLoad({ state: 'loading' })
+  useEffect(() => {
+    let cancelled = false
     listScans()
-      .then((scans) => setLoad({ state: 'ready', scans }))
-      .catch((err: unknown) =>
-        setLoad({ state: 'error', message: err instanceof Error ? err.message : 'Could not load history.' }),
-      )
-  }, [])
+      .then((scans) => {
+        if (!cancelled) setResolved({ attempt, state: 'ready', scans })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setResolved({
+            attempt,
+            state: 'error',
+            message: err instanceof Error ? err.message : 'Could not load history.',
+          })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
 
-  useEffect(refresh, [refresh])
+  const current = resolved?.attempt === attempt ? resolved : null
 
   const remove = (scanId: string) => {
     deleteScan(scanId)
       .then(() => {
-        setLoad((current) =>
-          current.state === 'ready'
-            ? { state: 'ready', scans: current.scans.filter((s) => s.scan_uuid !== scanId) }
-            : current,
+        setResolved((prev) =>
+          prev?.state === 'ready'
+            ? { ...prev, scans: prev.scans.filter((s) => s.scan_uuid !== scanId) }
+            : prev,
         )
         setConfirming(null)
         onDeleted(scanId)
@@ -94,7 +105,7 @@ export function HistoryDrawer({ currentScanId, onOpenScan, onDeleted, onClose }:
         </header>
 
         <div className="drawer-body">
-          {load.state === 'loading' && (
+          {current === null && (
             <ul className="history-list" aria-busy="true">
               {Array.from({ length: 5 }, (_, i) => (
                 <li key={i} className="skeleton skeleton-history" />
@@ -102,27 +113,27 @@ export function HistoryDrawer({ currentScanId, onOpenScan, onDeleted, onClose }:
             </ul>
           )}
 
-          {load.state === 'error' && (
+          {current?.state === 'error' && (
             <div className="drawer-empty" role="alert">
-              <p>{load.message}</p>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={refresh}>
+              <p>{current.message}</p>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setAttempt((a) => a + 1)}>
                 <RefreshIcon />
                 Try again
               </button>
             </div>
           )}
 
-          {load.state === 'ready' && load.scans.length === 0 && (
+          {current?.state === 'ready' && current.scans.length === 0 && (
             <div className="drawer-empty">
               <HistoryIcon size={20} />
               <p>No saved scans yet. Finished scans appear here.</p>
             </div>
           )}
 
-          {load.state === 'ready' && load.scans.length > 0 && (
+          {current?.state === 'ready' && current.scans.length > 0 && (
             <ul className="history-list">
               <AnimatePresence initial={false}>
-                {load.scans.map((scan) => (
+                {current.scans.map((scan) => (
                   <motion.li
                     key={scan.scan_uuid}
                     layout

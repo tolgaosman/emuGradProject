@@ -92,8 +92,8 @@
 
   /* Layout */
   --header-h: 56px;
-  --content-max: 100%;
-  --sidebar-w: clamp(320px, 30vw, 450px);
+  --content-max: 1480px;
+  --sidebar-w: clamp(320px, 28vw, 410px);
 
   /* Motion */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);

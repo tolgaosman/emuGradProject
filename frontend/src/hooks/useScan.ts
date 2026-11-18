@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AbortedError, NetworkError, getReport, runCheck } from '../api/client'
-import type { CheckOptions, RunningCheck } from '../api/client'
+import { AbortedError, NetworkError, getReport, runCheck, runSampleCheck } from '../api/client'
+import type { CheckOptions, RunningCheck, SampleCheckOptions } from '../api/client'
 import type { CheckResponse, FileError } from '../api/types'
 import { ApiError } from '../api/types'
 import type { Workspace } from '../lib/deriveResults'
@@ -10,7 +10,7 @@ import type { Workspace } from '../lib/deriveResults'
 export interface ScanMeta {
   layout: Workspace
   referenceName?: string
-  source: 'scan' | 'history'
+  source: 'scan' | 'history' | 'sample'
 }
 
 export type ScanState =
@@ -91,13 +91,33 @@ export function useScan() {
   )
 
   const open = useCallback(
-    (scanId: string) => {
+    (scanId: string, onLoaded?: (result: CheckResponse) => void) => {
       const mine = supersede()
       const meta: ScanMeta = { layout: 'batch', source: 'history' }
       setState({ status: 'loading', meta })
       getReport(scanId)
         .then((result) => {
-          if (mine === generation.current) setState({ status: 'ready', result, meta })
+          if (mine !== generation.current) return
+          setState({ status: 'ready', result, meta })
+          onLoaded?.(result)
+        })
+        .catch((err: unknown) => {
+          if (mine === generation.current) setState(toErrorState(err, meta))
+        })
+    },
+    [supersede],
+  )
+
+  const startSample = useCallback(
+    (options: SampleCheckOptions, onLoaded?: (result: CheckResponse) => void) => {
+      const mine = supersede()
+      const meta: ScanMeta = { layout: 'batch', source: 'sample' }
+      setState({ status: 'processing', meta })
+      runSampleCheck(options)
+        .then((result) => {
+          if (mine !== generation.current) return
+          setState({ status: 'ready', result, meta })
+          onLoaded?.(result)
         })
         .catch((err: unknown) => {
           if (mine === generation.current) setState(toErrorState(err, meta))
@@ -114,5 +134,5 @@ export function useScan() {
   // Don't leave an upload running after the component goes away.
   useEffect(() => () => inFlight.current?.abort(), [])
 
-  return { state, start, open, reset }
+  return { state, start, startSample, open, reset }
 }

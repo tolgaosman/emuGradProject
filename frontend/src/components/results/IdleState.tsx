@@ -1,67 +1,145 @@
 import { motion } from 'motion/react'
-import type { Mode } from '../../api/types'
-import type { Workspace } from '../../lib/deriveResults'
+import type { Algorithm, Mode, SamplePreset } from '../../api/types'
+import { ALGORITHM_LABEL, formatPercent } from '../../lib/format'
 import { EASE_OUT } from '../../lib/motion'
 import { MODE_EXTENSIONS } from '../DropZone/rules'
-import { ShieldIcon } from '../icons'
+import { CodeIcon, PlayIcon, ShieldIcon, TextIcon } from '../icons'
 
 interface IdleStateProps {
   mode: Mode
-  workspace: Workspace
+  threshold: number
+  algorithm: Algorithm
+  minMatchWords: number
+  useDefaultExclusions: boolean
+  excludedCount: number
+  disabled?: boolean
+  onRunSample: (preset: SamplePreset) => void
 }
 
 const item = {
   hidden: { opacity: 0, y: 8 },
-  shown: { opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE_OUT } },
+  shown: { opacity: 1, y: 0, transition: { duration: 0.35, ease: EASE_OUT } },
 }
 
-export function IdleState({ mode, workspace }: IdleStateProps) {
+export function IdleState({
+  mode,
+  threshold,
+  algorithm,
+  minMatchWords,
+  useDefaultExclusions,
+  excludedCount,
+  disabled,
+  onRunSample,
+}: IdleStateProps) {
   const isCode = mode === 'code_similarity'
-  const steps = [
-    {
-      title: 'Add documents',
-      body:
-        workspace === 'one-to-many'
-          ? 'Pick the document to check, then the ones to check it against.'
-          : 'Drop in every submission; each one is compared with all the others.',
-    },
-    {
-      title: 'Set the review threshold',
-      body: 'Pairs at or above it are flagged for a closer look — never an automatic verdict.',
-    },
-    {
-      title: 'Inspect the evidence',
-      body: 'Open any pair to see matching passages side by side, then export a PDF, CSV or HTML report.',
-    },
-  ]
+
+  const pipelineStages = isCode
+    ? [
+        { step: '01', name: 'Ingest & Sandbox', detail: '.py · .java · .c · .cpp · .zip' },
+        { step: '02', name: 'Lexical Strip', detail: 'Strip comments & string literals' },
+        { step: '03', name: 'Structural AST', detail: 'Python AST + C/Java identifier norm' },
+        { step: '04', name: 'Span Coverage', detail: `${minMatchWords}-word min · 5-gram & block link` },
+        { step: '05', name: 'Evidence Matrix', detail: 'Bi-directional diff, clusters & PDF' },
+      ]
+    : [
+        { step: '01', name: 'Dual-Parser Load', detail: 'pdfplumber → PyMuPDF · docx · txt' },
+        { step: '02', name: 'NLP Normalize', detail: 'Lowercase · NLTK tokenize · Porter stem' },
+        {
+          step: '03',
+          name: 'Stopword & Excl',
+          detail: useDefaultExclusions ? `50 academic terms${excludedCount ? ` + ${excludedCount}` : ''}` : 'NLTK stopwords',
+        },
+        { step: '04', name: '5-Gram & Index', detail: `${minMatchWords}-word min · Turnitin index` },
+        { step: '05', name: 'Evidence Matrix', detail: 'Synced highlights, clusters & PDF' },
+      ]
 
   return (
-    <motion.div className="idle" initial="hidden" animate="shown" transition={{ staggerChildren: 0.06 }}>
-      <motion.p className="eyebrow" variants={item}>
-        {isCode ? 'Source code similarity' : 'Document similarity'}
-      </motion.p>
-      <motion.h2 className="idle-title" variants={item}>
-        {isCode ? 'Find copied code, even when it’s been renamed.' : 'See exactly where documents overlap.'}
-      </motion.h2>
-      <motion.p className="idle-lede" variants={item}>
-        {isCode
-          ? 'Python, Java, C and C++ are compared token by token, and Python files structurally, so renamed variables don’t hide a copy.'
-          : 'Essays, reports and assignments are normalised, stemmed and compared phrase by phrase. Every match is highlighted in context.'}
-      </motion.p>
+    <motion.div className="idle" initial="hidden" animate="shown" transition={{ staggerChildren: 0.05 }}>
+      <motion.div className="idle-top" variants={item}>
+        <p className="eyebrow">{isCode ? 'Structural & lexical code analysis' : 'Local academic similarity workstation'}</p>
+        <h2 className="idle-title">
+          {isCode ? 'Catch copied logic — even after full identifier renaming.' : 'Transparent, phrase-exact similarity evidence.'}
+        </h2>
+        <p className="idle-lede">
+          {isCode
+            ? 'Compares Python abstract syntax trees and normalized C/C++/Java function blocks alongside 5-gram token fingerprints, linking every matched block side by side.'
+            : 'Extracts, normalizes, and compares academic submissions locally. Every score maps directly to highlighted passages, per-document source breakdowns, and collusion clusters.'}
+        </p>
+      </motion.div>
 
-      <motion.ol className="steps" variants={item}>
-        {steps.map((step, i) => (
-          <li key={step.title} className="step">
-            <span className="step-number num" aria-hidden="true">
-              {i + 1}
-            </span>
-            <div>
-              <h3 className="step-title">{step.title}</h3>
-              <p className="step-body">{step.body}</p>
+      <motion.div className="idle-demos-section" variants={item}>
+        <div className="idle-section-head">
+          <span className="idle-section-label">Instant verification suites</span>
+          <span className="idle-section-hint">Run built-in benchmark fixtures in one click</span>
+        </div>
+        <div className="idle-demos">
+          <button
+            type="button"
+            className="demo-card"
+            disabled={disabled}
+            onClick={() => onRunSample('text')}
+          >
+            <div className="demo-card-head">
+              <span className="demo-icon">
+                <TextIcon size={16} />
+              </span>
+              <span className="demo-badge num">4 files · TXT / PDF / DOCX</span>
             </div>
-          </li>
-        ))}
-      </motion.ol>
+            <div className="demo-card-body">
+              <h3 className="demo-title">Academic Prose & Multi-Format Batch</h3>
+              <p className="demo-desc">
+                Tests cross-format extraction, 50-term academic boilerplate filtering, Turnitin similarity index, and collusion clustering.
+              </p>
+            </div>
+            <span className="demo-cta">
+              <PlayIcon size={13} />
+              Run prose demo
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="demo-card"
+            disabled={disabled}
+            onClick={() => onRunSample('code')}
+          >
+            <div className="demo-card-head">
+              <span className="demo-icon">
+                <CodeIcon size={16} />
+              </span>
+              <span className="demo-badge num">2 files · Python AST</span>
+            </div>
+            <div className="demo-card-body">
+              <h3 className="demo-title">Renamed Identifier Code Plagiarism</h3>
+              <p className="demo-desc">
+                Tests two Python programs where every variable and function name was disguised — caught via normalized AST structure.
+              </p>
+            </div>
+            <span className="demo-cta">
+              <PlayIcon size={13} />
+              Run code AST demo
+            </span>
+          </button>
+        </div>
+      </motion.div>
+
+      <motion.div className="idle-pipeline-section" variants={item}>
+        <div className="idle-section-head">
+          <span className="idle-section-label">Active pipeline configuration</span>
+          <span className="idle-section-hint num">
+            {ALGORITHM_LABEL[algorithm]} · flag ≥ {formatPercent(threshold)} · min {minMatchWords}w
+          </span>
+        </div>
+        <ol className="pipeline-rail">
+          {pipelineStages.map((stage) => (
+            <li key={stage.step} className="pipeline-node">
+              <span className="pipeline-step num">{stage.step}</span>
+              <strong className="pipeline-name">{stage.name}</strong>
+              <span className="pipeline-detail">{stage.detail}</span>
+            </li>
+          ))}
+        </ol>
+      </motion.div>
 
       <motion.div className="idle-footer" variants={item}>
         <div className="format-chips" aria-label="Accepted formats">
@@ -70,10 +148,11 @@ export function IdleState({ mode, workspace }: IdleStateProps) {
               {ext}
             </span>
           ))}
+          <span className="format-chip">.zip</span>
         </div>
         <p className="privacy-note">
           <ShieldIcon />
-          Runs entirely on this machine. Documents never leave it.
+          100% offline local execution — zero cloud uploads or external APIs.
         </p>
       </motion.div>
     </motion.div>

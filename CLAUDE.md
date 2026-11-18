@@ -125,12 +125,16 @@ tokens to emit anything), so both disagree with the highlighting — winnowing
 scored the demo fixtures at 2.6% while the report highlighted 43.6%.
 
 `matched_spans()` counts two kinds of evidence, both highlightable:
-shared literal 5-grams, and — for Python-to-Python pairs — whole
-functions/classes whose *normalized* ASTs match (`reporter._structural_spans`,
-reusing `ast_model._NormalizerNodeVisitor`). The second exists because
-renaming every identifier defeats literal matching completely; it is what
-keeps `backend/samples/sample_code_b.py` (a pure rename of `backend/samples/sample_code_a.py`)
-scoring ~79% instead of ~8%, with each matched function highlighted.
+shared literal 5-grams, and — for Python-to-Python or C/C++/Java pairs —
+whole functions/classes/methods whose *normalized* structure matches
+(`reporter._structural_spans`, reusing `ast_model._NormalizerNodeVisitor` for
+Python and `ast_model.extract_c_family_functions` for C/C++/Java). The second
+exists because renaming every identifier defeats literal matching completely;
+it is what keeps `backend/samples/sample_code_b.py` (a pure rename of
+`backend/samples/sample_code_a.py`) and renamed C/C++/Java functions scoring
+~79–90% instead of ~8%, with each matched function highlighted. `reporter.paired_spans()`
+links matched blocks bi-directionally `(span_a, span_b)` so clicking any match
+in the side-by-side inspector synchronizes both panes.
 
 `ScanEngine.compute()` also computes a Turnitin-style per-document
 **Similarity Index** and ranked **source breakdown** (`similarity_index.py`)
@@ -199,10 +203,12 @@ Scans (and their raw-text sidecars) are subject to a retention window —
   sandbox that is always torn down. Report routes use Flask's `<uuid:...>`
   converter, so a malformed id 404s before touching the filesystem. Endpoints:
   `GET /api/status`, `GET /api/modes`, `GET /api/algorithms`,
-  `POST /api/detect-language`, `POST /api/check`, `GET /api/scans`,
-  `GET /api/report/<uuid>`, `DELETE /api/report/<uuid>`,
-  `GET /api/report/<uuid>/pair/<a>/<b>`,
-  `GET /api/report/<uuid>/pair-pdf/<a>/<b>`,
+  `GET /api/exclusions`, `POST /api/detect-language`, `POST /api/check` (also
+  expands `.zip` batch archives and accepts `excluded_terms` /
+  `use_default_exclusions`), `POST /api/check-sample` (`preset: "text" | "code"`),
+  `GET /api/scans`, `GET /api/report/<uuid>`, `DELETE /api/report/<uuid>`,
+  `GET /api/report/<uuid>/pair/<a>/<b>` (includes `paired_spans` and
+  `algorithm_scores`), `GET /api/report/<uuid>/pair-pdf/<a>/<b>`,
   `GET /api/report/<uuid>/matrix.csv`, `GET /api/report/<uuid>/report.html`,
   `GET /api/report/<uuid>/heatmap.png`. Errors always use the
   `{error, code, ...}` envelope, including framework-level 404/405/413/500s
@@ -249,8 +255,10 @@ right.
   machine as a fresh scan.
 - `src/lib/deriveResults.ts` — the single place that turns a `CheckResponse`
   plus the live threshold into what the results column renders
-  (`ResultsModel`); flags are re-derived from the threshold client-side, so
-  moving the slider after a scan doesn't require a re-run.
+  (`ResultsModel`, including the 10-bin score distribution `histogram` and
+  connected-component collusion `clusters`); flags, bins and clusters are
+  re-derived from the threshold client-side, so moving the slider after a scan
+  doesn't require a re-run.
 - `src/lib/risk.ts` — the one source of truth for similarity bands
   (`riskBand`) and what counts as flagged (`isFlagged`); every component
   (list, matrix, inspector, similarity index) reads through it rather than

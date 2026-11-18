@@ -1,9 +1,111 @@
-""" ast_model.py — Python AST Comparison Model. """
+""" ast_model.py — Python AST Comparison Model & C-family structural normalizer. """
 import ast
+import re
 
 import Levenshtein
 
+from ..language import blank_comments_and_strings
 from .base import SimilarityModel
+
+#: Control-flow and primitive keywords preserved verbatim during C/C++/Java
+#: structural normalization so control structure and types distinguish
+#: unrelated functions while user-chosen names become positional `id_N` tokens.
+_C_FAMILY_KEYWORDS = frozenset({
+    "if", "else", "for", "while", "do", "switch", "case", "default",
+    "break", "continue", "return", "try", "catch", "finally", "throw", "throws",
+    "new", "delete", "sizeof", "true", "false", "null", "nullptr", "this", "super",
+    "void", "int", "long", "short", "char", "float", "double", "bool", "boolean",
+    "unsigned", "signed", "const", "static", "public", "private", "protected",
+    "final", "class", "struct", "enum", "interface", "namespace", "template",
+})
+
+_NON_FUNC_HEADS = frozenset({"if", "for", "while", "switch", "catch", "synchronized", "return"})
+
+_C_FUNC_HEAD_RE = re.compile(
+    r"(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const\b|noexcept\b|override\b|throws\s+[\w.,\s]+)*\{"
+)
+
+_C_STRUCT_TOKEN_RE = re.compile(
+    r"\d+\.\d+|\d+|[A-Za-z_]\w*|==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|/=|->|[{}()\[\];,+\-*/%<>!=&|^~?:]"
+)
+
+_MIN_C_FUNC_TOKENS = 12
+
+
+def normalize_c_family_block(masked_block: str) -> tuple[str, int]:
+    """Normalize a comment/string-blanked C/C++/Java block into canonical tokens.
+
+    Returns `(canonical_signature, token_count)`. User identifiers become
+    `id_0`, `id_1`, ... in order of first appearance within the block.
+    """
+    id_map: dict[str, str] = {}
+    out: list[str] = []
+    for match in _C_STRUCT_TOKEN_RE.finditer(masked_block):
+        tok = match.group()
+        first = tok[0]
+        if first.isdigit():
+            out.append("NUM")
+        elif first.isalpha() or first == "_":
+            if tok in _C_FAMILY_KEYWORDS:
+                out.append(tok)
+            else:
+                mapped = id_map.get(tok)
+                if mapped is None:
+                    mapped = f"id_{len(id_map)}"
+                    id_map[tok] = mapped
+                out.append(mapped)
+        else:
+            out.append(tok)
+    return " ".join(out), len(out)
+
+
+def extract_c_family_functions(code: str, language: str) -> list[tuple[str, int, int]]:
+    """Return `(canonical_signature, start, end)` for each function/method in `code`.
+
+    Comments and string literals are blanked in place first so brace matching
+    and tokenization ignore them while offsets still index into `code`.
+    """
+    masked = blank_comments_and_strings(code, language)
+    out: list[tuple[str, int, int]] = []
+    cursor = 0
+    length = len(masked)
+
+    while cursor < length:
+        match = _C_FUNC_HEAD_RE.search(masked, cursor)
+        if match is None:
+            break
+        name = match.group("name")
+        brace_open = match.end() - 1
+        if name in _NON_FUNC_HEADS:
+            cursor = match.start() + len(name)
+            continue
+
+        # Walk back to include the return type / modifiers on this declaration.
+        decl_start = match.start()
+        while decl_start > 0 and masked[decl_start - 1] not in ";{}":
+            decl_start -= 1
+        while decl_start < match.start() and masked[decl_start].isspace():
+            decl_start += 1
+
+        depth = 1
+        pos = brace_open + 1
+        while pos < length and depth > 0:
+            ch = masked[pos]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            pos += 1
+
+        if depth != 0:
+            break
+
+        sig, tok_count = normalize_c_family_block(masked[decl_start:pos])
+        if tok_count >= _MIN_C_FUNC_TOKENS:
+            out.append((sig, decl_start, pos))
+        cursor = pos
+
+    return out
 
 
 class _NormalizerNodeVisitor(ast.NodeVisitor):

@@ -217,24 +217,34 @@ class ScanRepository:
                 logger.warning("Could not purge expired scan file %s", path, exc_info=True)
         return removed
 
-    def save_texts(self, scan_uuid: str, texts: dict, min_match_words: int) -> None:
+    def save_texts(
+        self,
+        scan_uuid: str,
+        texts: dict,
+        min_match_words: int,
+        source_breakdowns: dict | None = None,
+        excluded_terms: list[str] | None = None,
+        use_default_exclusions: bool = True,
+    ) -> None:
         """Persist raw text + language per file, for the pair-comparison view.
 
         `texts` is `{name: {"raw": str, "language": str}}`. The scan's
-        `min_match_words` rides along so the pair view can filter spans
-        exactly as the scan scored them.
+        `min_match_words`, `source_breakdowns`, and exclusion settings ride
+        along so the pair view and reopened reports match how the scan ran.
         """
         os.makedirs(self.json_dir, exist_ok=True)
-        payload = {"min_match_words": min_match_words, "files": texts}
+        payload = {
+            "min_match_words": min_match_words,
+            "files": texts,
+            "source_breakdowns": source_breakdowns or {},
+            "excluded_terms": list(excluded_terms or []),
+            "use_default_exclusions": use_default_exclusions,
+        }
         with open(self._texts_path(scan_uuid), "w", encoding="utf-8") as f:
             json.dump(payload, f)
 
-    def load_texts(self, scan_uuid: str) -> tuple[dict, int] | None:
-        """Return `(texts_by_name, min_match_words)`, or None if unavailable.
-
-        A truncated or unreadable sidecar means the comparison simply isn't
-        available — not a fault worth raising.
-        """
+    def load_sidecar(self, scan_uuid: str) -> dict | None:
+        """Return the full raw-text sidecar payload, or None if unavailable."""
         if not is_scan_uuid(scan_uuid):
             return None
         path = self._texts_path(scan_uuid)
@@ -244,6 +254,17 @@ class ScanRepository:
             with open(path, encoding="utf-8") as f:
                 payload = json.load(f)
         except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def load_texts(self, scan_uuid: str) -> tuple[dict, int] | None:
+        """Return `(texts_by_name, min_match_words)`, or None if unavailable.
+
+        A truncated or unreadable sidecar means the comparison simply isn't
+        available — not a fault worth raising.
+        """
+        payload = self.load_sidecar(scan_uuid)
+        if payload is None:
             return None
         return payload.get("files", {}), int(payload.get("min_match_words", 0))
 
@@ -340,9 +361,16 @@ class ScanRepository:
                     id_a, id_b = id_b, id_a
                 cur.execute(
                     "INSERT INTO scan_pair "
-                    "(scan_id, file_id_a, file_id_b, similarity_score, flagged) "
-                    "VALUES (%s, %s, %s, %s, %s)",
-                    (scan_id, id_a, id_b, pair["score"], pair["flagged"]),
+                    "(scan_id, file_id_a, file_id_b, similarity_score, flagged, matched_kgrams) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        scan_id,
+                        id_a,
+                        id_b,
+                        pair["score"],
+                        pair["flagged"],
+                        int(pair.get("matched_kgrams", 0)),
+                    ),
                 )
 
     def _list_db(self, conn, limit: int) -> list[dict]:
@@ -414,20 +442,24 @@ class ScanRepository:
             }
 
             cur.execute(
-                "SELECT file_id_a, file_id_b, similarity_score, flagged FROM scan_pair "
-                "WHERE scan_id = %s",
+                "SELECT file_id_a, file_id_b, similarity_score, flagged, matched_kgrams "
+                "FROM scan_pair WHERE scan_id = %s",
                 (scan_id,),
             )
-            pairs = [
-                {
+            pairs = []
+            for pair_row in cur.fetchall():
+                id_a, id_b, score, flagged = pair_row[:4]
+                entry = {
                     "file_a": files[id_a]["file_name"],
                     "file_b": files[id_b]["file_name"],
                     "score": float(score),
                     "flagged": bool(flagged),
                 }
-                for id_a, id_b, score, flagged in cur.fetchall()
-            ]
+                if len(pair_row) >= 5 and pair_row[4] is not None:
+                    entry["matched_kgrams"] = int(pair_row[4])
+                pairs.append(entry)
 
+        sidecar = self.load_sidecar(scan_uuid)
         return {
             "scan_uuid": scan_uuid,
             "algorithm": algorithm,
@@ -438,10 +470,7 @@ class ScanRepository:
             "timestamp": timestamp.isoformat(),
             "files": list(files.values()),
             "pairs": pairs,
-            # Ranked per-source contributions aren't persisted relationally
-            # — only available for scans that are still in the JSON
-            # fallback / same-process cache.
-            "source_breakdowns": {},
+            "source_breakdowns": (sidecar or {}).get("source_breakdowns", {}),
         }
 
     # -- JSON fallback -----------------------------------------------------

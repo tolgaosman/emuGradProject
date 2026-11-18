@@ -172,3 +172,38 @@ export const CodeIcon = (p: IconProps) => (
     <path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14" />
   </Icon>
 )
+
+export const SearchIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m16 16 4 4" />
+  </Icon>
+)
+
+export const PlayIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M7 5.5v13l11-6.5-11-6.5Z" />
+  </Icon>
+)
+
+export const ClusterIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="6" cy="6.5" r="2.5" />
+    <circle cx="18" cy="6.5" r="2.5" />
+    <circle cx="12" cy="17.5" r="2.5" />
+    <path d="M8.5 6.5h7M7.3 8.7l3.4 6.5M16.7 8.7l-3.4 6.5" />
+  </Icon>
+)
+
+export const FoldIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m8 4 4 4 4-4M8 20l4-4 4 4M4 12h16" />
+  </Icon>
+)
+
+export const LinkIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M10 13a4.5 4.5 0 0 0 6.4.4l2.3-2.3a4.5 4.5 0 0 0-6.4-6.4L11 6" />
+    <path d="M14 11a4.5 4.5 0 0 0-6.4-.4L5.3 13a4.5 4.5 0 0 0 6.4 6.4L13 18" />
+  </Icon>
+)

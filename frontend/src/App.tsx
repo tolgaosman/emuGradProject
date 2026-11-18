@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'motion/react'
 import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import { downloadFile, exportUrls } from './api/client'
-import type { Algorithm, Mode } from './api/types'
+import type { Algorithm, CheckResponse, Mode, SamplePreset } from './api/types'
 import { DropZone } from './components/DropZone/DropZone'
 import { DEFAULT_MIN_MATCH_WORDS, keptFiles } from './components/DropZone/rules'
 import { Header } from './components/Header'
@@ -38,11 +38,15 @@ function App() {
   const [algorithm, setAlgorithm] = useState<Algorithm>('auto')
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD)
   const [minMatchWords, setMinMatchWords] = useState(DEFAULT_MIN_MATCH_WORDS)
+  const [excludedTerms, setExcludedTerms] = useState<string[]>([])
+  const [useDefaultExclusions, setUseDefaultExclusions] = useState(true)
+  const [lastSamplePreset, setLastSamplePreset] = useState<SamplePreset | null>(null)
+  const [runSignature, setRunSignature] = useState('')
   const [selected, setSelected] = useState<ResultRow | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [exportBusy, setExportBusy] = useState<ExportKind | null>(null)
 
-  const { state, start, open, reset } = useScan()
+  const { state, start, startSample, open, reset } = useScan()
   const { theme, toggleTheme } = useTheme()
   const { status: apiStatus, retry: retryStatus } = useApiStatus()
   const toast = useToast()
@@ -50,10 +54,13 @@ function App() {
   const busy = state.status === 'uploading' || state.status === 'processing' || state.status === 'loading'
   const result = state.status === 'ready' ? state.result : null
   const files = workspace === 'one-to-many' ? [...reference, ...candidates] : batch
+  const hasZipInBatch = workspace === 'batch' && batch.some((f) => f.name.toLowerCase().endsWith('.zip'))
 
   const blockedReason = (() => {
     if (apiStatus.state === 'offline') return 'The PlagCheck server is unreachable.'
-    if (workspace === 'batch') return batch.length < 2 ? 'Add at least two documents to compare.' : null
+    if (workspace === 'batch') {
+      return batch.length < 2 && !hasZipInBatch ? 'Add at least two documents (or a .zip archive) to compare.' : null
+    }
     if (reference.length === 0) return 'Add the document you want to check.'
     if (candidates.length === 0) return 'Add at least one document to compare it with.'
     return null
@@ -67,15 +74,29 @@ function App() {
     [state, threshold],
   )
 
+  const currentExclSig = `${useDefaultExclusions ? '1' : '0'}:${excludedTerms.join(',')}`
   const settingsChanged =
     state.status === 'ready' &&
-    state.meta.source === 'scan' &&
-    (state.result.mode !== mode || state.result.algorithm !== algorithm || state.result.min_match_words !== minMatchWords)
+    (state.meta.source === 'scan' || state.meta.source === 'sample') &&
+    (state.result.mode !== mode ||
+      state.result.algorithm !== algorithm ||
+      state.result.min_match_words !== minMatchWords ||
+      (runSignature !== '' && runSignature !== currentExclSig))
 
   const clearStaged = () => {
     setReference([])
     setCandidates([])
     setBatch([])
+  }
+
+  const syncLoadedScan = (scan: CheckResponse) => {
+    if (scan.mode !== mode) {
+      clearStaged()
+      setMode(scan.mode)
+    }
+    setAlgorithm(scan.algorithm)
+    setThreshold(scan.threshold)
+    setMinMatchWords(scan.min_match_words)
   }
 
   const handleModeChange = (next: Mode) => {
@@ -98,16 +119,50 @@ function App() {
   }
 
   const runScan = () => {
-    if (blockedReason || busy) return
+    if (busy) return
+    if (state.status === 'ready' && state.meta.source === 'sample' && lastSamplePreset) {
+      runSample(lastSamplePreset)
+      return
+    }
+    if (blockedReason) return
     setSelected(null)
+    setRunSignature(currentExclSig)
     start(
-      { files, mode, threshold, algorithm, minMatchWords },
+      { files, mode, threshold, algorithm, minMatchWords, excludedTerms, useDefaultExclusions },
       { layout: workspace, referenceName: reference[0]?.name },
+    )
+  }
+
+  const runSample = (preset: SamplePreset) => {
+    if (busy || apiStatus.state === 'offline') {
+      if (apiStatus.state === 'offline') toast.show('Start the local PlagCheck API server first.', 'error')
+      return
+    }
+    const targetMode: Mode = preset === 'code' ? 'code_similarity' : 'text_similarity'
+    setWorkspace('batch')
+    if (targetMode !== mode) {
+      setMode(targetMode)
+      setAlgorithm('auto')
+    }
+    setLastSamplePreset(preset)
+    setSelected(null)
+    setRunSignature(currentExclSig)
+    startSample(
+      {
+        preset,
+        threshold,
+        algorithm: targetMode !== mode ? 'auto' : algorithm,
+        minMatchWords,
+        excludedTerms,
+        useDefaultExclusions,
+      },
+      syncLoadedScan,
     )
   }
 
   const handleReset = () => {
     setSelected(null)
+    setLastSamplePreset(null)
     reset()
   }
 
@@ -122,23 +177,6 @@ function App() {
     return () => window.removeEventListener('keydown', onShortcut)
   }, [])
 
-  // A reopened scan brings its own settings; mirror them so the controls
-  // describe what's on screen.
-  const reopened = state.status === 'ready' && state.meta.source === 'history' ? state.result : null
-  const adoptSettings = useEffectEvent((scan: NonNullable<typeof reopened>) => {
-    if (scan.mode !== mode) {
-      clearStaged()
-      setMode(scan.mode)
-    }
-    setAlgorithm(scan.algorithm)
-    setThreshold(scan.threshold)
-    setMinMatchWords(scan.min_match_words)
-  })
-  useEffect(() => {
-    if (reopened) adoptSettings(reopened)
-  }, [reopened])
-
-  // On stacked (narrow) layouts, bring fresh results into view.
   useEffect(() => {
     if (state.status !== 'ready' || !window.matchMedia('(max-width: 1024px)').matches) return
     document.getElementById('results')?.scrollIntoView({ block: 'start' })
@@ -187,7 +225,7 @@ function App() {
       />
 
       <main className="page">
-        <h1 className="visually-hidden">PlagCheck — plagiarism and file similarity detection</h1>
+        <h1 className="visually-hidden">PlagCheck — local similarity and plagiarism analysis</h1>
         <WorkspaceTabs value={workspace} onChange={handleWorkspaceChange} disabled={busy} />
 
         <div className="workspace" id="workspace-panel" role="tabpanel" aria-labelledby={`workspace-tab-${workspace}`}>
@@ -200,7 +238,7 @@ function App() {
               {workspace === 'one-to-many' ? (
                 <>
                   <DropZone
-                    label="Check this document"
+                    label="Reference document"
                     files={reference}
                     onFilesChange={setReference}
                     mode={mode}
@@ -208,7 +246,7 @@ function App() {
                     disabled={busy}
                   />
                   <DropZone
-                    label="Against these"
+                    label="Comparison candidates"
                     files={candidates}
                     onFilesChange={setCandidates}
                     mode={mode}
@@ -218,8 +256,8 @@ function App() {
                 </>
               ) : (
                 <DropZone
-                  label="Submissions"
-                  description="Every file is compared with every other."
+                  label="Class / batch submissions"
+                  description="Compare every file with every other — supports folders & .zip archives."
                   files={batch}
                   onFilesChange={setBatch}
                   mode={mode}
@@ -231,7 +269,7 @@ function App() {
             <section className="panel" aria-labelledby="settings-title">
               <h2 id="settings-title" className="panel-title">
                 <span className="panel-step num">2</span>
-                Review settings
+                Review parameters
               </h2>
               <ScanSettings
                 mode={mode}
@@ -241,6 +279,10 @@ function App() {
                 onThresholdChange={setThreshold}
                 minMatchWords={minMatchWords}
                 onMinMatchWordsChange={setMinMatchWords}
+                excludedTerms={excludedTerms}
+                onExcludedTermsChange={setExcludedTerms}
+                useDefaultExclusions={useDefaultExclusions}
+                onUseDefaultExclusionsChange={setUseDefaultExclusions}
                 disabled={busy}
               />
             </section>
@@ -253,11 +295,16 @@ function App() {
               state={state}
               model={model}
               mode={mode}
-              workspace={workspace}
+              algorithm={algorithm}
               threshold={threshold}
+              minMatchWords={minMatchWords}
+              useDefaultExclusions={useDefaultExclusions}
+              excludedCount={excludedTerms.length}
               settingsChanged={settingsChanged}
               selectedId={selected?.id ?? null}
               exportBusy={exportBusy}
+              onThresholdChange={setThreshold}
+              onRunSample={runSample}
               onOpenPair={setSelected}
               onDownloadPdf={savePairPdf}
               onExport={saveExport}
@@ -292,7 +339,8 @@ function App() {
             onOpenScan={(scanId) => {
               setHistoryOpen(false)
               setSelected(null)
-              open(scanId)
+              setWorkspace('batch')
+              open(scanId, syncLoadedScan)
             }}
             onDeleted={(scanId) => {
               if (result?.scan_id === scanId) handleReset()

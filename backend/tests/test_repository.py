@@ -96,7 +96,7 @@ def test_save_db_orders_pair_ids_ascending():
     pair_calls = [c for c in fake_cursor.execute.call_args_list if "scan_pair" in c.args[0]]
     assert len(pair_calls) == 1
     _, params = pair_calls[0].args
-    _, id_a, id_b, _score, _flagged = params
+    _, id_a, id_b, _score, _flagged, _kgrams = params
     assert id_a < id_b
     assert {id_a, id_b} == {20, 30}
 
@@ -321,3 +321,39 @@ def test_db_delete_reports_rowcount(monkeypatch, tmp_path):
     monkeypatch.setattr(repo, "_get_connection", lambda: fake_conn)
     assert repo.delete_scan(_uuid()) is True
     fake_conn.commit.assert_called_once()
+
+
+def test_load_db_rehydrates_matched_kgrams_and_sidecar_breakdowns(monkeypatch, tmp_path):
+    """5-column scan_pair rows and sidecar source_breakdowns survive DB reload."""
+    scan_uuid = _uuid()
+    repo = ScanRepository(json_dir=str(tmp_path))
+    repo.save_texts(
+        scan_uuid,
+        {"a.txt": {"raw": "hello", "language": "text"}},
+        8,
+        source_breakdowns={"a.txt": [{"source": "b.txt", "contribution": 0.8, "spans": [[0, 5]]}]},
+        excluded_terms=["cmse405"],
+        use_default_exclusions=False,
+    )
+
+    fake_cursor = MagicMock()
+    fake_cursor.fetchone.side_effect = [
+        (10, 0.70, "complete", datetime(2026, 1, 1, 12, 0, 0)),
+    ]
+    fake_cursor.fetchall.side_effect = [
+        [("text_similarity",)],
+        [(1, "a.txt", 100, "txt", 0.8), (2, "b.txt", 200, "txt", 0.8)],
+        [(1, 2, 0.8, True, 12)],
+    ]
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+    monkeypatch.setattr(repo, "_get_connection", lambda: fake_conn)
+
+    record = repo.get_scan(scan_uuid)
+    assert record is not None
+    assert record["pairs"][0]["matched_kgrams"] == 12
+    assert record["source_breakdowns"]["a.txt"][0]["source"] == "b.txt"
+    sidecar = repo.load_sidecar(scan_uuid)
+    assert sidecar is not None
+    assert sidecar["excluded_terms"] == ["cmse405"]
+    assert sidecar["use_default_exclusions"] is False

@@ -1,44 +1,65 @@
 import { motion } from 'motion/react'
-import type { SourceContribution } from '../../api/types'
+import type { ScanFileInfo, SourceContribution } from '../../api/types'
 import { formatPercent } from '../../lib/format'
 import { spring } from '../../lib/motion'
 import { riskBand } from '../../lib/risk'
+import { RiskPill } from './RiskPill'
 
-const TOP_SOURCES = 3
+const TOP_SOURCES = 4
 
 interface SimilarityIndexPanelProps {
   indices: Record<string, number>
   breakdowns: Record<string, SourceContribution[]>
+  files?: readonly ScanFileInfo[]
+  onInspectSource?: (fileA: string, fileB: string) => void
 }
 
 /** Turnitin-style per-document index: how much of each document matches
  * *anything* else in the scan — distinct from any single pair's score. */
-export function SimilarityIndexPanel({ indices, breakdowns }: SimilarityIndexPanelProps) {
+export function SimilarityIndexPanel({
+  indices,
+  breakdowns,
+  files,
+  onInspectSource,
+}: SimilarityIndexPanelProps) {
   const entries = Object.entries(indices).sort(([, a], [, b]) => b - a)
   if (entries.length === 0) return null
+
+  const wordMap = new Map(files?.map((f) => [f.name, f.word_count]) ?? [])
 
   return (
     <section className="card" aria-labelledby="similarity-index-title">
       <header className="card-head">
         <div>
           <h2 id="similarity-index-title" className="card-title">
-            Similarity index
+            Per-document similarity index
           </h2>
-          <p className="card-subtitle">Share of each document found anywhere else in this scan.</p>
+          <p className="card-subtitle">
+            Asymmetric share of each submission matched anywhere else in this batch — click a source to inspect.
+          </p>
         </div>
       </header>
       <ul className="index-list">
         {entries.map(([name, index]) => {
           const sources = (breakdowns[name] ?? []).slice(0, TOP_SOURCES)
+          const words = wordMap.get(name)
           return (
             <li key={name} className="index-row">
               <div className="index-head">
-                <span className="index-name truncate" title={name}>
-                  {name}
-                </span>
-                <span className="index-value num" data-band={riskBand(index)}>
-                  {formatPercent(index)}
-                </span>
+                <div className="index-title-group">
+                  <span className="index-name truncate" title={name}>
+                    {name}
+                  </span>
+                  {words !== undefined && (
+                    <span className="index-words num">{words.toLocaleString()} words</span>
+                  )}
+                </div>
+                <div className="index-score-group">
+                  <RiskPill score={index} />
+                  <span className="index-value num" data-band={riskBand(index)}>
+                    {formatPercent(index)}
+                  </span>
+                </div>
               </div>
               <span className="meter meter-thin" aria-hidden="true">
                 <motion.span
@@ -49,18 +70,33 @@ export function SimilarityIndexPanel({ indices, breakdowns }: SimilarityIndexPan
                   transition={spring.gentle}
                 />
               </span>
-              {sources.length > 0 && (
-                <p className="index-sources">
-                  {sources.map((s, i) => (
-                    <span key={s.source}>
-                      {i > 0 && <span aria-hidden="true"> · </span>}
-                      <span className="truncate index-source" title={s.source}>
-                        {s.source}
-                      </span>{' '}
-                      <span className="num">{formatPercent(s.contribution)}</span>
-                    </span>
-                  ))}
-                </p>
+              {sources.length > 0 ? (
+                <div className="index-sources">
+                  <span className="index-sources-label">Top sources:</span>
+                  {sources.map((s) =>
+                    onInspectSource ? (
+                      <button
+                        key={s.source}
+                        type="button"
+                        className="index-source-btn"
+                        title={`Compare ${name} with ${s.source}`}
+                        onClick={() => onInspectSource(name, s.source)}
+                      >
+                        <span className="truncate index-source">{s.source}</span>
+                        <span className="num index-source-pct">{formatPercent(s.contribution)}</span>
+                      </button>
+                    ) : (
+                      <span key={s.source} className="index-source-static">
+                        <span className="truncate index-source" title={s.source}>
+                          {s.source}
+                        </span>{' '}
+                        <span className="num">{formatPercent(s.contribution)}</span>
+                      </span>
+                    ),
+                  )}
+                </div>
+              ) : (
+                <p className="index-clean">No overlapping passages above the minimum word filter.</p>
               )}
             </li>
           )

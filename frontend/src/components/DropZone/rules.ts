@@ -44,13 +44,16 @@ export function validateFiles(
 
   for (const file of candidates) {
     const ext = extensionOf(file.name)
+    const isBatchZip = ext === '.zip' && maxFiles > 1
     let reason: string | null = null
-    if (!extensions.includes(ext)) {
+    if (!extensions.includes(ext) && !isBatchZip) {
       reason = `${ext || 'This format'} isn’t accepted in ${mode === 'text_similarity' ? 'Text' : 'Code'} mode`
     } else if (file.size === 0) {
       reason = 'The file is empty'
-    } else if (file.size > MAX_BYTES) {
+    } else if (!isBatchZip && file.size > MAX_BYTES) {
       reason = 'Larger than the 10 MB limit'
+    } else if (isBatchZip && file.size > MAX_BYTES * MAX_FILES) {
+      reason = 'Archive exceeds total batch size limit'
     } else if (count >= maxFiles) {
       reason = maxFiles === 1 ? 'Only one file fits here' : `The ${maxFiles}-file limit is reached`
     }
@@ -67,7 +70,10 @@ export function validateFiles(
 
 /** Staged files that stay valid after a mode switch, and how many were dropped. */
 export function keptFiles(files: readonly File[], mode: Mode): { kept: File[]; skipped: number } {
-  const kept = files.filter((file) => MODE_EXTENSIONS[mode].includes(extensionOf(file.name)))
+  const kept = files.filter((file) => {
+    const ext = extensionOf(file.name)
+    return MODE_EXTENSIONS[mode].includes(ext) || ext === '.zip'
+  })
   return { kept, skipped: files.length - kept.length }
 }
 

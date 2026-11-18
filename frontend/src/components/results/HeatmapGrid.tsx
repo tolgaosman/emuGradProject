@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent } from 'react'
 import { formatPercent } from '../../lib/format'
 import { isFlagged } from '../../lib/risk'
+import { RiskPill } from './RiskPill'
 
 interface HeatmapGridProps {
   names: string[]
@@ -42,7 +43,6 @@ export function HeatmapGrid({ names, scores, threshold, reference, onSelect }: H
     e.preventDefault()
     let r = rowPos + move[0]
     let c = colPos + move[1]
-    // Skip over the empty lower triangle rather than stopping at it.
     while (r >= 0 && r < rowIndices.length && c >= 0 && c < colIndices.length) {
       if (isCell(rowIndices[r], colIndices[c])) {
         focusCell(r, c)
@@ -53,73 +53,103 @@ export function HeatmapGrid({ names, scores, threshold, reference, onSelect }: H
     }
   }
 
+  const activeScore = active ? (scores[active.row]?.[active.col] ?? 0) : null
+
   return (
-    <div className="heatmap-scroll">
-      <div
-        ref={gridRef}
-        className="heatmap"
-        role="grid"
-        aria-label="Similarity matrix"
-        style={{ '--cols': colIndices.length } as CSSProperties}
-        onMouseLeave={() => setActive(null)}
-      >
-        <div className="heatmap-row" role="row">
-          <span className="heatmap-corner" role="columnheader">
-            <span className="visually-hidden">Document</span>
+    <div className="heatmap-wrap">
+      <div className="heatmap-toolbar">
+        <div className="heatmap-legend" aria-label="Matrix color scale">
+          <span className="heatmap-legend-label num">0%</span>
+          <span className="heatmap-legend-ramp" aria-hidden="true" />
+          <span className="heatmap-legend-label num">100%</span>
+          <span className="heatmap-legend-flag">
+            <span className="heatmap-legend-swatch" aria-hidden="true" />
+            Flagged ≥ {formatPercent(threshold)}
           </span>
-          {colIndices.map((c) => (
-            <span
-              key={names[c]}
-              role="columnheader"
-              className="heatmap-col-label"
-              data-active={active?.col === c || undefined}
-              title={names[c]}
-            >
-              <span>{names[c]}</span>
-            </span>
-          ))}
         </div>
 
-        {rowIndices.map((r, rowPos) => (
-          <div key={names[r]} className="heatmap-row" role="row">
-            <span
-              role="rowheader"
-              className="heatmap-row-label truncate"
-              data-active={active?.row === r || undefined}
-              title={names[r]}
-            >
-              {names[r]}
+        <div className="heatmap-readout" aria-live="polite">
+          {active && activeScore !== null ? (
+            <>
+              <span className="truncate">{names[active.row]}</span>
+              <span aria-hidden="true">↔</span>
+              <span className="truncate">{names[active.col]}</span>
+              <strong className="num">{formatPercent(activeScore)}</strong>
+              <RiskPill score={activeScore} />
+            </>
+          ) : (
+            <span className="heatmap-readout-idle">Hover or arrow-key any cell to preview · click to open</span>
+          )}
+        </div>
+      </div>
+
+      <div className="heatmap-scroll">
+        <div
+          ref={gridRef}
+          className="heatmap"
+          role="grid"
+          aria-label="Similarity matrix"
+          style={{ '--cols': colIndices.length } as CSSProperties}
+          onMouseLeave={() => setActive(null)}
+        >
+          <div className="heatmap-row" role="row">
+            <span className="heatmap-corner" role="columnheader">
+              <span className="visually-hidden">Document</span>
             </span>
-            {colIndices.map((c, colPos) => {
-              if (!isCell(r, c)) {
-                return <span key={names[c]} role="gridcell" className="heatmap-cell heatmap-cell-empty" />
-              }
-              const score = scores[r]?.[c] ?? 0
-              return (
-                <span key={names[c]} role="gridcell">
-                  <button
-                    type="button"
-                    className="heatmap-cell"
-                    data-pos={`${rowPos}-${colPos}`}
-                    data-flagged={isFlagged(score, threshold) || undefined}
-                    data-strong={score >= STRONG_INTENSITY || undefined}
-                    style={{ '--intensity': `${Math.round(score * 100)}%` } as CSSProperties}
-                    tabIndex={rowPos === 0 && colPos === 0 ? 0 : -1}
-                    aria-label={`${names[r]} and ${names[c]}: ${formatPercent(score)}`}
-                    title={`${names[r]} ↔ ${names[c]} · ${formatPercent(score)}`}
-                    onMouseEnter={() => setActive({ row: r, col: c })}
-                    onFocus={() => setActive({ row: r, col: c })}
-                    onBlur={() => setActive(null)}
-                    onKeyDown={(e) => handleKeyDown(e, rowPos, colPos)}
-                    onClick={() => onSelect(names[r], names[c])}
-                  >
-                    {Math.round(score * 100)}
-                  </button>
-                </span>
-              )
-            })}
+            {colIndices.map((c) => (
+              <span
+                key={names[c]}
+                role="columnheader"
+                className="heatmap-col-label"
+                data-active={active?.col === c || undefined}
+                title={names[c]}
+              >
+                <span>{names[c]}</span>
+              </span>
+            ))}
           </div>
-        ))}
+
+          {rowIndices.map((r, rowPos) => (
+            <div key={names[r]} className="heatmap-row" role="row">
+              <span
+                role="rowheader"
+                className="heatmap-row-label truncate"
+                data-active={active?.row === r || undefined}
+                title={names[r]}
+              >
+                {names[r]}
+              </span>
+              {colIndices.map((c, colPos) => {
+                if (!isCell(r, c)) {
+                  return <span key={names[c]} role="gridcell" className="heatmap-cell heatmap-cell-empty" />
+                }
+                const score = scores[r]?.[c] ?? 0
+                return (
+                  <span key={names[c]} role="gridcell">
+                    <button
+                      type="button"
+                      className="heatmap-cell"
+                      data-pos={`${rowPos}-${colPos}`}
+                      data-flagged={isFlagged(score, threshold) || undefined}
+                      data-strong={score >= STRONG_INTENSITY || undefined}
+                      style={{ '--intensity': `${Math.round(score * 100)}%` } as CSSProperties}
+                      tabIndex={rowPos === 0 && colPos === 0 ? 0 : -1}
+                      aria-label={`${names[r]} and ${names[c]}: ${formatPercent(score)}`}
+                      title={`${names[r]} ↔ ${names[c]} · ${formatPercent(score)}`}
+                      onMouseEnter={() => setActive({ row: r, col: c })}
+                      onFocus={() => setActive({ row: r, col: c })}
+                      onBlur={() => setActive(null)}
+                      onKeyDown={(e) => handleKeyDown(e, rowPos, colPos)}
+                      onClick={() => onSelect(names[r], names[c])}
+                    >
+                      {Math.round(score * 100)}
+                    </button>
+                  </span>
+                )
+              })}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )

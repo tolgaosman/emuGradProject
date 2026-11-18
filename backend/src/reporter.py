@@ -17,7 +17,10 @@ from matplotlib.patches import Rectangle
 
 from .language import CODE_LANGUAGES, blank_comments_and_strings
 from .matrix import ComparisonMatrix
-from .models.ast_model import _NormalizerNodeVisitor
+from .models.ast_model import _NormalizerNodeVisitor, extract_c_family_functions
+
+_C_STRUCT_LANGUAGES = frozenset({"java", "c", "cpp"})
+_PAIR_WORD_RE = re.compile(r"\w+")
 
 _PY_KEEP_TYPES = {py_tokenize.NAME, py_tokenize.NUMBER, py_tokenize.STRING}
 #: Identifiers/keywords and numeric literals for the non-Python code
@@ -382,20 +385,29 @@ def _normalized_def_spans(text: str) -> list[tuple[str, int, int]] | None:
     return out
 
 
+def _structural_defs(text: str, language: str) -> list[tuple[str, int, int]] | None:
+    """Return `(canonical_dump, start, end)` for definitions in `text`."""
+    if language == "python":
+        return _normalized_def_spans(text)
+    if language in _C_STRUCT_LANGUAGES:
+        return extract_c_family_functions(text, language)
+    return None
+
+
 def _structural_spans(
-    text_a: str, text_b: str
+    text_a: str, text_b: str, language_a: str = "python", language_b: str = "python"
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Char ranges of Python defs/classes that are structurally identical.
+    """Char ranges of defs/classes/functions that are structurally identical.
 
     Renaming every variable defeats literal k-gram matching entirely — which
-    is the most common way copied code is disguised, and exactly what the AST
-    model exists to catch. Reporting those matches as spans keeps that
-    evidence *showable*: the score rises only for source the comparison view
-    can actually highlight, and a renamed copy is highlighted function by
-    function rather than scoring near zero.
+    is the most common way copied code is disguised, and exactly what
+    structural normalization exists to catch. Reporting those matches as spans
+    keeps that evidence *showable*: the score rises only for source the
+    comparison view can actually highlight, and a renamed copy is highlighted
+    function by function rather than scoring near zero.
     """
-    defs_a = _normalized_def_spans(text_a)
-    defs_b = _normalized_def_spans(text_b)
+    defs_a = _structural_defs(text_a, language_a)
+    defs_b = _structural_defs(text_b, language_b)
     if defs_a is None or defs_b is None:
         return [], []
 
@@ -417,8 +429,8 @@ def matched_spans(
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     """Find character ranges in `text_a`/`text_b` covered by shared content.
 
-    Literal shared k-grams always count. For a Python-to-Python pair,
-    structurally identical functions/classes count too (see
+    Literal shared k-grams always count. For code pairs in Python or
+    C/C++/Java, structurally identical functions/classes count too (see
     `_structural_spans`) — otherwise a rename-only copy would show no
     evidence at all.
     """
@@ -439,12 +451,118 @@ def matched_spans(
     raw_a = [(s, e) for kg, s, e in kgrams_a if kg in set_b]
     raw_b = [(s, e) for kg, s, e in kgrams_b if kg in set_a]
 
-    if language_a == "python" and language_b == "python":
-        struct_a, struct_b = _structural_spans(text_a, text_b)
+    if (language_a == "python" and language_b == "python") or (
+        language_a in _C_STRUCT_LANGUAGES and language_b in _C_STRUCT_LANGUAGES
+    ):
+        struct_a, struct_b = _structural_spans(text_a, text_b, language_a, language_b)
         raw_a += struct_a
         raw_b += struct_b
 
     return _merge_spans(raw_a), _merge_spans(raw_b)
+
+
+def paired_spans(
+    text_a: str,
+    text_b: str,
+    language_a: str,
+    language_b: str,
+    preprocessor,
+    min_match_words: int = 0,
+    k: int = _KGRAM_K,
+) -> list[dict]:
+    """Return bi-directional linked match blocks between `text_a` and `text_b`.
+
+    Each returned item is `{"id": int, "span_a": [sa, ea], "span_b": [sb, eb],
+    "kind": "literal" | "structural"}` ordered by `span_a` start offset and
+    filtered by `min_match_words`. Used by the side-by-side inspector so
+    clicking a match in Document A scrolls Document B to the corresponding
+    passage.
+    """
+    tokens_a = _spanned_tokens(text_a, language_a, preprocessor)
+    tokens_b = _spanned_tokens(text_b, language_b, preprocessor)
+
+    def indexed_kgrams(tokens):
+        return [
+            (i, " ".join(t[0] for t in tokens[i : i + k]), tokens[i][1], tokens[i + k - 1][2])
+            for i in range(len(tokens) - k + 1)
+        ]
+
+    kg_a = indexed_kgrams(tokens_a)
+    kg_b = indexed_kgrams(tokens_b)
+    by_kg_b: dict[str, list[tuple[int, int, int]]] = {}
+    for idx_b, kg, sb, eb in kg_b:
+        by_kg_b.setdefault(kg, []).append((idx_b, sb, eb))
+
+    blocks: list[list] = []  # [sa, ea, sb, eb, last_idx_a, last_idx_b, kind]
+    for idx_a, kg, sa, ea in kg_a:
+        candidates = by_kg_b.get(kg)
+        if not candidates:
+            continue
+        chosen = candidates[0]
+        if blocks:
+            prev = blocks[-1]
+            for cand in candidates:
+                if 0 < cand[0] - prev[5] <= k:
+                    chosen = cand
+                    break
+        idx_b, sb, eb = chosen
+        if (
+            blocks
+            and 0 < idx_a - blocks[-1][4] <= k
+            and 0 < idx_b - blocks[-1][5] <= k
+            and sa <= blocks[-1][1] + 32
+            and sb <= blocks[-1][3] + 32
+        ):
+            blocks[-1][1] = max(blocks[-1][1], ea)
+            blocks[-1][3] = max(blocks[-1][3], eb)
+            blocks[-1][4] = idx_a
+            blocks[-1][5] = idx_b
+        else:
+            blocks.append([sa, ea, sb, eb, idx_a, idx_b, "literal"])
+
+    raw_pairs: list[tuple[int, int, int, int, str]] = [
+        (b[0], b[1], b[2], b[3], b[6]) for b in blocks
+    ]
+
+    if (language_a == "python" and language_b == "python") or (
+        language_a in _C_STRUCT_LANGUAGES and language_b in _C_STRUCT_LANGUAGES
+    ):
+        defs_a = _structural_defs(text_a, language_a) or []
+        defs_b = _structural_defs(text_b, language_b) or []
+        by_dump_b: dict[str, list[tuple[int, int]]] = {}
+        for dump, sb, eb in defs_b:
+            by_dump_b.setdefault(dump, []).append((sb, eb))
+        struct_pairs: list[tuple[int, int, int, int, str]] = []
+        for dump, sa, ea in defs_a:
+            matches_b = by_dump_b.get(dump)
+            if matches_b:
+                sb, eb = matches_b[0]
+                struct_pairs.append((sa, ea, sb, eb, "structural"))
+        if struct_pairs:
+            # Drop literal sub-blocks already wholly covered on both sides by a structural match.
+            raw_pairs = [
+                lp
+                for lp in raw_pairs
+                if not any(
+                    sp[0] <= lp[0] and lp[1] <= sp[1] and sp[2] <= lp[2] and lp[3] <= sp[3]
+                    for sp in struct_pairs
+                )
+            ] + struct_pairs
+
+    def passes_words(sa: int, ea: int, sb: int, eb: int) -> bool:
+        if min_match_words <= 0:
+            return True
+        return (
+            len(_PAIR_WORD_RE.findall(text_a[sa:ea])) >= min_match_words
+            and len(_PAIR_WORD_RE.findall(text_b[sb:eb])) >= min_match_words
+        )
+
+    filtered = [p for p in raw_pairs if passes_words(p[0], p[1], p[2], p[3])]
+    filtered.sort(key=lambda p: (p[0], p[2]))
+    return [
+        {"id": i, "span_a": [sa, ea], "span_b": [sb, eb], "kind": kind}
+        for i, (sa, ea, sb, eb, kind) in enumerate(filtered)
+    ]
 
 
 def _highlight_segments(text: str, spans: list[tuple[int, int]]) -> list[tuple[str, bool]]:

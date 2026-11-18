@@ -72,8 +72,11 @@ CREATE TABLE IF NOT EXISTS scan_pair (
  file_id_b INTEGER NOT NULL REFERENCES scan_file(file_id),
  similarity_score FLOAT NOT NULL CHECK (similarity_score >= 0 AND similarity_score <= 1),
  flagged BOOLEAN NOT NULL DEFAULT FALSE,
+ matched_kgrams INTEGER NOT NULL DEFAULT 0,
  CONSTRAINT chk_pair_order CHECK (file_id_a < file_id_b)
 );
+
+ALTER TABLE scan_pair ADD COLUMN IF NOT EXISTS matched_kgrams INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_pair_scan ON scan_pair (scan_id);
 CREATE INDEX IF NOT EXISTS idx_pair_flagged ON scan_pair (flagged) WHERE flagged = TRUE;

@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import type { Mode } from '../../api/types'
+import { formatBytes } from '../../lib/format'
 import { panelMotion, spring } from '../../lib/motion'
 import { UploadIcon } from '../icons'
 import { FileList } from './FileList'
@@ -22,6 +23,52 @@ interface DropZoneProps {
   disabled?: boolean
 }
 
+async function readDroppedItems(dataTransfer: DataTransfer): Promise<File[]> {
+  const items = Array.from(dataTransfer.items ?? [])
+  const entries = items
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter((entry): entry is FileSystemEntry => entry !== null && entry !== undefined)
+
+  if (entries.length === 0 || !entries.some((e) => e.isDirectory)) {
+    return Array.from(dataTransfer.files)
+  }
+
+  const collected: File[] = []
+  const visit = (entry: FileSystemEntry): Promise<void> =>
+    new Promise((resolve) => {
+      if (entry.isFile) {
+        ;(entry as FileSystemFileEntry).file(
+          (f) => {
+            if (!f.name.startsWith('.')) collected.push(f)
+            resolve()
+          },
+          () => resolve(),
+        )
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader()
+        const readBatch = () => {
+          reader.readEntries(
+            async (batch) => {
+              if (batch.length === 0) {
+                resolve()
+                return
+              }
+              await Promise.all(batch.map(visit))
+              readBatch()
+            },
+            () => resolve(),
+          )
+        }
+        readBatch()
+      } else {
+        resolve()
+      }
+    })
+
+  await Promise.all(entries.map(visit))
+  return collected.length > 0 ? collected : Array.from(dataTransfer.files)
+}
+
 export function DropZone({
   label,
   description,
@@ -40,10 +87,9 @@ export function DropZone({
   const uid = useId()
   const single = maxFiles === 1
   const extensions = MODE_EXTENSIONS[mode]
+  const acceptAttr = single ? extensions.join(',') : [...extensions, '.zip'].join(',')
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
 
-  // The parent can drop files out from under this zone (an incompatible file
-  // after a mode switch, a new scan, a single-slot upload replacing a paste). When the pasted file is
-  // gone, reset the paste box so its text can't resurrect it.
   useEffect(() => {
     if (pasteFile.current && !files.includes(pasteFile.current)) {
       pasteFile.current = null
@@ -72,8 +118,6 @@ export function DropZone({
     if (accepted.length) onFilesChange([...files, ...accepted])
   }
 
-  /** Keep the paste box's live file in the list: replaced in place while
-   * typing, removed when cleared. */
   const handlePaste = (next: File | null) => {
     const previous = pasteFile.current
     if (!next && !previous) return
@@ -120,7 +164,7 @@ export function DropZone({
       setDragging(false)
       if (disabled) return
       setTab('upload')
-      addFiles(e.dataTransfer.files)
+      void readDroppedItems(e.dataTransfer).then(addFiles)
     },
   }
 
@@ -171,17 +215,22 @@ export function DropZone({
             </motion.span>
             <span className="dropzone-text">
               <span className="dropzone-primary">
-                {dragging ? 'Drop to add' : single ? 'Choose a file or drop it here' : 'Choose files or drop them here'}
+                {dragging
+                  ? 'Drop files or folder'
+                  : single
+                    ? 'Choose a file or drop it here'
+                    : 'Drop files, a folder, or a .zip batch'}
               </span>
               <span className="dropzone-secondary">
-                {extensions.join(' · ')} · up to 10 MB{single ? '' : ` · ${maxFiles} files`}
+                {extensions.join(' · ')}
+                {single ? ' · max 10 MB' : ` · .zip · up to ${maxFiles} files`}
               </span>
             </span>
             <input
               className="visually-hidden"
               type="file"
               multiple={!single}
-              accept={extensions.join(',')}
+              accept={acceptAttr}
               disabled={disabled}
               onChange={(e) => {
                 if (e.target.files) addFiles(e.target.files)
@@ -213,9 +262,12 @@ export function DropZone({
         <>
           <FileList files={files} onRemove={removeFile} disabled={disabled} />
           {files.length > 1 && (
-            <button type="button" className="btn btn-link zone-clear" onClick={clearAll} disabled={disabled}>
-              Remove all
-            </button>
+            <div className="zone-foot">
+              <span className="zone-foot-meta num">Total {formatBytes(totalBytes)}</span>
+              <button type="button" className="btn btn-link zone-clear" onClick={clearAll} disabled={disabled}>
+                Remove all
+              </button>
+            </div>
           )}
         </>
       )}

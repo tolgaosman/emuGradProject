@@ -107,12 +107,61 @@
   text-align: center;
 }
 
-.inspector-legend {
-  padding: var(--space-2) 18px;
+.inspector-subbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding: 8px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
+}
+
+.inspector-legend {
   color: var(--text-2);
   font-size: var(--text-xs);
+}
+
+.match-sync-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.algo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.algo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.algo-chip[data-active] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.algo-chip-name {
+  color: var(--text-3);
+}
+
+.algo-chip[data-active] .algo-chip-name {
+  color: var(--text-2);
 }
 
 .inspector-legend mark,
@@ -204,25 +253,24 @@
   font-weight: 500;
 }
 
-.match-nav {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 2px;
+.doc-pane-stats {
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.match-nav-count {
-  margin-right: 6px;
-  color: var(--text-2);
-  font-size: var(--text-xs);
-  white-space: nowrap;
+.doc-pane-viewport {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .doc-pane-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: var(--space-2) 0 var(--space-6);
+  padding: var(--space-2) 12px var(--space-6) 0;
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.65;
@@ -249,6 +297,34 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+.doc-line[data-active-line] {
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+}
+
+.doc-fold-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 5px 14px 5px 18px;
+  border: 0;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.doc-fold-row:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
 .doc-line-no {
   padding-right: 14px;
   color: var(--text-3);
@@ -271,11 +347,61 @@
 }
 
 .doc-line-code mark {
+  cursor: pointer;
   transition: background-color var(--duration-base) var(--ease-out);
+}
+
+.doc-line-code mark:hover {
+  background: color-mix(in srgb, var(--mark-active) 75%, transparent);
 }
 
 .doc-line-code mark[data-active] {
   background: var(--mark-active);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.match-tag {
+  display: inline-block;
+  margin-right: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: baseline;
+}
+
+.doc-minimap {
+  position: relative;
+  flex-shrink: 0;
+  width: 10px;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.doc-minimap-tick {
+  position: absolute;
+  top: var(--top);
+  left: 1px;
+  right: 1px;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.7;
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.doc-minimap-tick:hover,
+.doc-minimap-tick[data-active] {
+  opacity: 1;
+  background: var(--risk-high);
+  transform: scaleY(1.6);
 }
 
 /* ---------- History drawer ---------- */

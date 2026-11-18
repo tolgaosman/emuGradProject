@@ -11,20 +11,19 @@ interface CountUpProps {
  * than popping in — skipped entirely for reduced-motion users. */
 export function CountUp({ value, format }: CountUpProps) {
   const reduceMotion = useReducedMotion()
-  const [display, setDisplay] = useState(reduceMotion ? value : 0)
+  const [display, setDisplay] = useState(value)
 
   useEffect(() => {
-    if (reduceMotion) {
-      setDisplay(value)
-      return
-    }
+    if (reduceMotion) return
     const controls = animate(0, value, { duration: 0.7, ease: EASE_OUT, onUpdate: setDisplay })
     return () => controls.stop()
   }, [value, reduceMotion])
 
+  const shown = reduceMotion ? value : display
+
   return (
     <span className="num">
-      <span aria-hidden="true">{format(display)}</span>
+      <span aria-hidden="true">{format(shown)}</span>
       <span className="visually-hidden">{format(value)}</span>
     </span>
   )
