@@ -4,17 +4,14 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-# `pytest` now runs from the repo root (see pyproject.toml), so coverage.py
-# writes its data file here, not backend/.coverage. It regenerates on every
-# run, so it's ignored like any other build artifact — this is distinct from
-# the tracked backend/.coverage, which is a frozen historical snapshot.
-/.coverage
+# Coverage data (pytest runs from backend/, see pyproject.toml)
+.coverage
 .coverage.*
 htmlcov/
 *.egg-info/
 
-# Local env overrides (backend/.env itself is tracked; a real deployment
-# should override its placeholder credentials via .env.local, never commit it)
+# Local environment; copy backend/.env.example to backend/.env
+.env
 .env.local
 
 # Logs

@@ -37,8 +37,8 @@ CLI and API (run from inside `backend/`, where `from src.…` imports resolve):
 
 ```bash
 cd backend
-venv/Scripts/python.exe plagcheck.py --files ../samples/sample_a.txt ../samples/sample_b.txt \
-    --mode text_similarity --threshold 0.5 --output ../output
+venv/Scripts/python.exe plagcheck.py --files samples/sample_a.txt samples/sample_b.txt \
+    --mode text_similarity --threshold 0.5 --output output
 venv/Scripts/python.exe app.py        # Flask, port from APP_PORT (default 5000)
 ```
 
@@ -58,6 +58,12 @@ npm run build    # tsc -b && vite build — must be clean
 npm run lint     # oxlint
 npx tsc -b       # typecheck only
 ```
+
+Deployment: the API is served by `gunicorn --chdir backend app:app` (see
+`backend/Procfile`, `backend/render.yaml`; `CORS_ORIGIN` is set for the
+GitHub Pages frontend). The repo-root `package.json` has convenience scripts
+(`npm run dev|api|build|lint`); `npm run build` builds the frontend and copies
+`frontend/dist` into the repo root for GitHub Pages (`.nojekyll`).
 
 ## Architectural ground truth
 
@@ -120,7 +126,7 @@ shared literal 5-grams, and — for Python-to-Python pairs — whole
 functions/classes whose *normalized* ASTs match (`reporter._structural_spans`,
 reusing `ast_model._NormalizerNodeVisitor`). The second exists because
 renaming every identifier defeats literal matching completely; it is what
-keeps `samples/sample_code_b.py` (a pure rename of `sample_code_a.py`)
+keeps `backend/samples/sample_code_b.py` (a pure rename of `backend/samples/sample_code_a.py`)
 scoring ~79% instead of ~8%, with each matched function highlighted.
 
 `ScanEngine.compute()` also computes a Turnitin-style per-document
