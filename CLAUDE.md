@@ -42,6 +42,9 @@ venv/Scripts/python.exe plagcheck.py --files samples/sample_a.txt samples/sample
 venv/Scripts/python.exe app.py        # Flask, port from APP_PORT (default 5000)
 ```
 
+Local config: copy `backend/.env.example` to `backend/.env` (untracked and
+gitignored, like `.coverage`); never commit real credentials.
+
 NLTK data (English stopwords + `punkt_tab`) is vendored in `backend/nltk_data/`
 and loaded from there — never downloaded. `src/preprocessor.py` falls back to
 an offline tokenizer if that directory is ever missing; it must never call
@@ -56,7 +59,7 @@ cd frontend
 npm run dev      # :5173
 npm run build    # tsc -b && vite build — must be clean
 npm run lint     # oxlint
-npx tsc -b       # typecheck only
+npx tsc -b       # typecheck only (tsconfig.app.json has `strict: true`)
 ```
 
 Deployment: the API is served by `gunicorn --chdir backend app:app` (see
